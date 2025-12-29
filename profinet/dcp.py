@@ -101,6 +101,7 @@ class DCPDeviceDescription:
     Attributes:
         mac: MAC address string
         name: Station name
+        device_type: Device type/family (e.g., "S7-1200")
         ip: IP address string
         netmask: Network mask string
         gateway: Gateway address string
@@ -121,6 +122,13 @@ class DCPDeviceDescription:
             DCPError: If required blocks are missing
         """
         self.mac = mac2s(mac)
+
+        # Handle device type/family (e.g., "S7-1200")
+        type_block = blocks.get(PNDCPBlock.DEVICE_TYPE)
+        if type_block is not None:
+            self.device_type = type_block.rstrip(b"\x00").decode("utf-8", errors="replace")
+        else:
+            self.device_type = ""
 
         # Handle station name (required)
         name_block = blocks.get(PNDCPBlock.NAME_OF_STATION)
@@ -171,20 +179,25 @@ class DCPDeviceDescription:
 
     def __repr__(self) -> str:
         return (
-            f"DCPDeviceDescription(name={self.name!r}, ip={self.ip}, "
-            f"mac={self.mac}, vendor={self.vendor_name!r})"
+            f"DCPDeviceDescription(name={self.name!r}, type={self.device_type!r}, "
+            f"ip={self.ip}, mac={self.mac}, vendor={self.vendor_name!r})"
         )
 
     def __str__(self) -> str:
-        return (
-            f"PROFINET Device: {self.name}\n"
-            f"  MAC:     {self.mac}\n"
-            f"  IP:      {self.ip}\n"
-            f"  Netmask: {self.netmask}\n"
-            f"  Gateway: {self.gateway}\n"
-            f"  Vendor:  {self.vendor_name} (0x{self.vendor_id:04X})\n"
-            f"  Device:  0x{self.device_id:04X}"
-        )
+        lines = [
+            f"PROFINET Device: {self.name}",
+            f"  MAC:     {self.mac}",
+        ]
+        if self.device_type:
+            lines.append(f"  Type:    {self.device_type}")
+        lines.extend([
+            f"  IP:      {self.ip}",
+            f"  Netmask: {self.netmask}",
+            f"  Gateway: {self.gateway}",
+            f"  Vendor:  {self.vendor_name} (0x{self.vendor_id:04X})",
+            f"  Device:  0x{self.device_id:04X}",
+        ])
+        return "\n".join(lines)
 
 
 # =============================================================================

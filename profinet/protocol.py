@@ -117,8 +117,11 @@ class PNDCPBlock(
 
     # Block option/suboption constants
     IP_ADDRESS: Tuple[int, int] = (1, 2)
+    DEVICE_TYPE: Tuple[int, int] = (2, 1)  # Device type/family (e.g., "S7-1200")
     NAME_OF_STATION: Tuple[int, int] = (2, 2)
     DEVICE_ID: Tuple[int, int] = (2, 3)
+    DEVICE_ROLE: Tuple[int, int] = (2, 4)
+    DEVICE_OPTIONS: Tuple[int, int] = (2, 5)
     ALL: Tuple[int, int] = (0xFF, 0xFF)
 
     def parse_ip(self) -> IPConfiguration:
