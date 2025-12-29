@@ -45,6 +45,7 @@ from .dcp import (
     read_response,
     get_param,
     set_param,
+    set_ip,
     signal_device,
     reset_to_factory,
     # Constants
@@ -157,6 +158,7 @@ __all__ = [
     "read_response",
     "get_param",
     "set_param",
+    "set_ip",
     "signal_device",
     "reset_to_factory",
     # Reset modes

@@ -312,6 +312,80 @@ def set_param(
         return False
 
 
+def set_ip(
+    sock: socket,
+    src: bytes,
+    target: str,
+    ip: str,
+    netmask: str,
+    gateway: str,
+    timeout_sec: int = 5,
+) -> bool:
+    """Set IP configuration on a PROFINET device via DCP.
+
+    Args:
+        sock: Raw Ethernet socket
+        src: Source MAC address (6 bytes)
+        target: Target device MAC address string
+        ip: New IP address (e.g., "192.168.10.3")
+        netmask: Subnet mask (e.g., "255.255.255.0")
+        gateway: Gateway address (e.g., "192.168.10.1")
+        timeout_sec: Timeout in seconds
+
+    Returns:
+        True if response received, False if timeout
+    """
+    dst = s2mac(target)
+    xid = _generate_xid()
+
+    # Convert IP strings to bytes (4 bytes each)
+    def ip_to_bytes(ip_str: str) -> bytes:
+        parts = ip_str.split(".")
+        return bytes([int(p) for p in parts])
+
+    ip_bytes = ip_to_bytes(ip)
+    netmask_bytes = ip_to_bytes(netmask)
+    gateway_bytes = ip_to_bytes(gateway)
+
+    # IP block payload: 2 bytes qualifier + 4 IP + 4 netmask + 4 gateway = 14 bytes
+    value_bytes = ip_bytes + netmask_bytes + gateway_bytes
+
+    block = PNDCPBlockRequest(
+        PNDCPBlock.IP_ADDRESS[0],  # Option (0x01 = IP)
+        PNDCPBlock.IP_ADDRESS[1],  # Suboption (0x02 = IP Suite)
+        len(value_bytes) + 2,  # Length includes 2-byte qualifier
+        payload=bytes([0x00, 0x01]) + value_bytes,  # 0x0001 = set temporary
+    )
+
+    # Calculate length with padding (blocks are 2-byte aligned)
+    padding = 0 if len(value_bytes) % 2 == 0 else 1
+    dcp = PNDCPHeader(
+        DCP_GET_SET_FRAME_ID,
+        PNDCPHeader.SET,
+        PNDCPHeader.REQUEST,
+        xid,
+        0,
+        len(value_bytes) + 6 + padding,
+        payload=block,
+    )
+    eth = EthernetVLANHeader(
+        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
+    )
+
+    sock.send(bytes(eth))
+
+    # Wait for response
+    sock.settimeout(float(timeout_sec))
+    try:
+        sock.recv(MAX_ETHERNET_FRAME)
+        # Wait for device to process
+        time.sleep(2)
+        return True
+    except SocketTimeout:
+        logger.warning(f"No response from {target} for set_ip")
+        return False
+
+
 def send_discover(sock: socket, src: bytes) -> None:
     """Send DCP Identify multicast request.
 
