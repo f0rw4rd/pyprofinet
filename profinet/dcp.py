@@ -33,6 +33,7 @@ from .util import (
     MAX_ETHERNET_FRAME,
     PROFINET_ETHERTYPE,
     VLAN_ETHERTYPE,
+    ETH_P_ALL,
     mac2s,
     max_timeout,
     s2ip,
@@ -230,9 +231,7 @@ def get_param(
         2,
         payload=block,
     )
-    eth = EthernetVLANHeader(
-        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
-    )
+    eth = EthernetHeader(dst, src, PROFINET_ETHERTYPE, payload=dcp)
 
     sock.send(bytes(eth))
 
@@ -294,9 +293,7 @@ def set_param(
         len(value_bytes) + 6 + padding,
         payload=block,
     )
-    eth = EthernetVLANHeader(
-        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
-    )
+    eth = EthernetHeader(dst, src, PROFINET_ETHERTYPE, payload=dcp)
 
     sock.send(bytes(eth))
 
@@ -368,9 +365,7 @@ def set_ip(
         len(value_bytes) + 6 + padding,
         payload=block,
     )
-    eth = EthernetVLANHeader(
-        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
-    )
+    eth = EthernetHeader(dst, src, PROFINET_ETHERTYPE, payload=dcp)
 
     sock.send(bytes(eth))
 
@@ -386,7 +381,7 @@ def set_ip(
         return False
 
 
-def send_discover(sock: socket, src: bytes) -> None:
+def send_discover(sock: socket, src: bytes, response_delay: int = 0x0080) -> None:
     """Send DCP Identify multicast request.
 
     Sends an Identify request to the PROFINET multicast address
@@ -395,6 +390,7 @@ def send_discover(sock: socket, src: bytes) -> None:
     Args:
         sock: Raw Ethernet socket
         src: Source MAC address (6 bytes)
+        response_delay: Max response delay in 10ms units (default: 0x0080 = 1.28s)
     """
     xid = _generate_xid()
 
@@ -404,15 +400,13 @@ def send_discover(sock: socket, src: bytes) -> None:
         PNDCPHeader.IDENTIFY,
         PNDCPHeader.REQUEST,
         xid,
-        0,
+        response_delay,
         len(block),
         payload=block,
     )
-    eth = EthernetVLANHeader(
+    eth = EthernetHeader(
         s2mac(DCP_MULTICAST_MAC),
         src,
-        VLAN_ETHERTYPE,
-        0,
         PROFINET_ETHERTYPE,
         payload=dcp,
     )
@@ -447,11 +441,9 @@ def send_request(
         len(block),
         payload=block,
     )
-    eth = EthernetVLANHeader(
+    eth = EthernetHeader(
         s2mac(DCP_MULTICAST_MAC),
         src,
-        VLAN_ETHERTYPE,
-        0,
         PROFINET_ETHERTYPE,
         payload=dcp,
     )
@@ -503,8 +495,22 @@ def read_response(
                     logger.debug(f"Failed to parse Ethernet header: {e}")
                     continue
 
-                # Filter: only packets to us with PROFINET type
-                if eth.dst != my_mac or eth.type != PROFINET_ETHERTYPE:
+                # Filter: only packets to us
+                if eth.dst != my_mac:
+                    continue
+
+                # Handle both VLAN-tagged and non-VLAN frames
+                # Some devices (e.g., Siemens S7-1200) respond with VLAN tags
+                payload = eth.payload
+                if eth.type == VLAN_ETHERTYPE:
+                    # VLAN header: 2 bytes TCI + 2 bytes inner ethertype
+                    if len(payload) < 4:
+                        continue
+                    inner_type = (payload[2] << 8) | payload[3]
+                    if inner_type != PROFINET_ETHERTYPE:
+                        continue
+                    payload = payload[4:]  # Skip VLAN header
+                elif eth.type != PROFINET_ETHERTYPE:
                     continue
 
                 if debug:
@@ -512,7 +518,7 @@ def read_response(
 
                 # Parse DCP header
                 try:
-                    dcp = PNDCPHeader(eth.payload)
+                    dcp = PNDCPHeader(payload)
                 except ValueError as e:
                     logger.debug(f"Failed to parse DCP header: {e}")
                     continue
@@ -619,9 +625,7 @@ def signal_device(
         len(block_data) + 4,  # block header (4) + data
         payload=block,
     )
-    eth = EthernetVLANHeader(
-        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
-    )
+    eth = EthernetHeader(dst, src, PROFINET_ETHERTYPE, payload=dcp)
 
     sock.send(bytes(eth))
     logger.debug(f"Sent DCP Signal request to {target} (duration={duration_ms}ms)")
@@ -685,9 +689,7 @@ def reset_to_factory(
         len(block_qualifier) + 4,  # block header (4) + data
         payload=block,
     )
-    eth = EthernetVLANHeader(
-        dst, src, VLAN_ETHERTYPE, 0, PROFINET_ETHERTYPE, payload=dcp
-    )
+    eth = EthernetHeader(dst, src, PROFINET_ETHERTYPE, payload=dcp)
 
     sock.send(bytes(eth))
     logger.debug(f"Sent DCP Reset to Factory request to {target} (mode=0x{mode:04X})")

@@ -20,7 +20,7 @@ import re
 import time
 from collections import OrderedDict, namedtuple
 from fcntl import ioctl
-from socket import AF_INET, AF_PACKET, SOCK_DGRAM, SOCK_RAW, socket
+from socket import AF_INET, AF_PACKET, SOCK_DGRAM, SOCK_RAW, htons, socket
 from struct import calcsize, pack, unpack
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 MAX_ETHERNET_FRAME = 1522
 PROFINET_ETHERTYPE = 0x8892
 VLAN_ETHERTYPE = 0x8100
+ETH_P_ALL = 0x0003  # Receive all Ethernet protocols
 
 # ioctl constants (Linux-specific)
 SIOCGIFHWADDR = 0x8927
@@ -182,12 +183,13 @@ def get_mac(ifname: str) -> bytes:
         raise SocketError(f"Failed to get MAC address for {ifname!r}: {e}") from e
 
 
-def ethernet_socket(interface: str, ethertype: int) -> socket:
+def ethernet_socket(interface: str, ethertype: int = None) -> socket:
     """Create raw Ethernet socket bound to interface.
 
     Args:
         interface: Network interface name
-        ethertype: Ethernet type to filter (e.g., 0x8892 for PROFINET)
+        ethertype: Ethernet type to filter. If None, receives all packets
+                   (needed for VLAN-tagged responses). Default: ETH_P_ALL.
 
     Returns:
         Bound raw socket
@@ -198,13 +200,18 @@ def ethernet_socket(interface: str, ethertype: int) -> socket:
 
     Note:
         This function is Linux-specific (uses AF_PACKET).
+        Uses ETH_P_ALL by default because some devices (e.g., Siemens S7-1200)
+        respond with VLAN-tagged frames (0x8100) even to non-VLAN requests.
     """
     if not interface:
         raise SocketError("Interface name cannot be empty")
 
+    # Default to ETH_P_ALL to capture VLAN-tagged responses
+    proto = ethertype if ethertype is not None else ETH_P_ALL
+
     try:
-        s = socket(AF_PACKET, SOCK_RAW)
-        s.bind((interface, ethertype))
+        s = socket(AF_PACKET, SOCK_RAW, htons(proto))
+        s.bind((interface, 0))
         return s
     except PermissionError as e:
         raise PermissionDeniedError(
