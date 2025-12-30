@@ -1,7 +1,23 @@
 """Tests for profinet.dcp module."""
 
 import pytest
-from profinet.dcp import DCPDeviceDescription, PARAMS
+from profinet.dcp import (
+    DCPDeviceDescription,
+    PARAMS,
+    decode_device_role,
+    get_block_name,
+    DEVICE_ROLE_IO_DEVICE,
+    DEVICE_ROLE_IO_CONTROLLER,
+    DEVICE_ROLE_IO_MULTIDEVICE,
+    DEVICE_ROLE_PN_SUPERVISOR,
+    DCP_OPTION_IP,
+    DCP_OPTION_DEVICE,
+    DCP_SUBOPTION_DEVICE_TYPE,
+    DCP_SUBOPTION_DEVICE_ROLE,
+    DCP_SUBOPTION_DEVICE_INSTANCE,
+    DCP_SUBOPTION_DEVICE_OPTIONS,
+    DCP_SUBOPTION_DEVICE_ALIAS,
+)
 from profinet.protocol import PNDCPBlock
 
 
@@ -102,6 +118,275 @@ class TestDCPDeviceDescription:
         str_output = str(device)
         assert "PROFINET Device" in str_output
         assert "my-device" in str_output
+
+    def test_device_type_parsing(self):
+        """Test device type block parsing."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.DEVICE_TYPE: b"S7-1200",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_type == "S7-1200"
+
+    def test_device_type_with_null_terminator(self):
+        """Test device type with null bytes stripped."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_TYPE: b"ET 200SP\x00\x00\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_type == "ET 200SP"
+
+    def test_device_role_io_device(self):
+        """Test device role parsing for IO-Device."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_ROLE: b"\x01\x00",  # IO-Device
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_role == 0x01
+        assert "IO-Device" in device.device_roles
+
+    def test_device_role_io_controller(self):
+        """Test device role parsing for IO-Controller."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_ROLE: b"\x02\x00",  # IO-Controller
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_role == 0x02
+        assert "IO-Controller" in device.device_roles
+
+    def test_device_role_combined(self):
+        """Test device role with multiple roles."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_ROLE: b"\x03\x00",  # IO-Device + IO-Controller
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_role == 0x03
+        assert "IO-Device" in device.device_roles
+        assert "IO-Controller" in device.device_roles
+
+    def test_device_instance(self):
+        """Test device instance parsing."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_INSTANCE: b"\x00\x64",  # Instance 0.100
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_instance == (0, 100)
+
+    def test_device_alias(self):
+        """Test device alias name parsing."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.DEVICE_ALIAS: b"port-001.plc-main\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.alias_name == "port-001.plc-main"
+
+    def test_supported_options(self):
+        """Test supported options parsing."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        # Options block: (opt, subopt) pairs
+        blocks = {
+            PNDCPBlock.DEVICE_OPTIONS: b"\x01\x02\x02\x01\x02\x03",  # IP/IP, Dev/Type, Dev/DeviceID
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert (1, 2) in device.supported_options  # IP/IP
+        assert (2, 1) in device.supported_options  # Device/Type
+        assert (2, 3) in device.supported_options  # Device/DeviceID
+
+    def test_raw_blocks_unknown_option(self):
+        """Test unknown blocks are stored in raw_blocks."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x80, 0x01): b"\xde\xad\xbe\xef",  # Vendor-specific block
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert (0x80, 0x01) in device.raw_blocks
+        assert device.raw_blocks[(0x80, 0x01)] == b"\xde\xad\xbe\xef"
+
+    def test_raw_blocks_not_include_known(self):
+        """Test known blocks are not in raw_blocks."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.IP_ADDRESS: b"\xc0\xa8\x01\x01" + b"\xff\xff\xff\x00" + b"\x00\x00\x00\x00",
+            PNDCPBlock.DEVICE_TYPE: b"S7-1500",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        # Known blocks should not be in raw_blocks
+        assert PNDCPBlock.NAME_OF_STATION not in device.raw_blocks
+        assert PNDCPBlock.IP_ADDRESS not in device.raw_blocks
+        assert PNDCPBlock.DEVICE_TYPE not in device.raw_blocks
+
+    def test_str_with_unknown_blocks(self):
+        """Test string output includes unknown blocks."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x80, 0x01): b"\xde\xad",  # Vendor-specific
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+        str_output = str(device)
+
+        assert "Unknown (128,1)" in str_output
+        assert "dead" in str_output
+
+    def test_full_siemens_device(self):
+        """Test parsing realistic Siemens S7-1200 response."""
+        mac = b"\x28\x63\x36\x80\xb1\xf4"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"plcxb1d0ed",
+            PNDCPBlock.DEVICE_TYPE: b"S7-1200",
+            PNDCPBlock.IP_ADDRESS: b"\xc0\xa8\x00\xd7" + b"\xff\xff\xff\x00" + b"\xc0\xa8\x00\x01",
+            PNDCPBlock.DEVICE_ID: b"\x00\x2a\x01\x0d",  # Siemens, S7-1200
+            PNDCPBlock.DEVICE_ROLE: b"\x02\x00",  # IO-Controller
+            PNDCPBlock.DEVICE_INSTANCE: b"\x00\x64",  # 0.100
+            PNDCPBlock.DEVICE_OPTIONS: b"\x02\x07",  # Device/Instance
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.mac == "28:63:36:80:b1:f4"
+        assert device.name == "plcxb1d0ed"
+        assert device.device_type == "S7-1200"
+        assert device.ip == "192.168.0.215"
+        assert device.vendor_id == 0x002a
+        assert device.device_id == 0x010d
+        assert "IO-Controller" in device.device_roles
+        assert device.device_instance == (0, 100)
+
+
+class TestDecodeDeviceRole:
+    """Test decode_device_role function."""
+
+    def test_io_device(self):
+        """Test IO-Device role."""
+        roles = decode_device_role(DEVICE_ROLE_IO_DEVICE)
+        assert roles == ["IO-Device"]
+
+    def test_io_controller(self):
+        """Test IO-Controller role."""
+        roles = decode_device_role(DEVICE_ROLE_IO_CONTROLLER)
+        assert roles == ["IO-Controller"]
+
+    def test_io_multidevice(self):
+        """Test IO-Multidevice role."""
+        roles = decode_device_role(DEVICE_ROLE_IO_MULTIDEVICE)
+        assert roles == ["IO-Multidevice"]
+
+    def test_pn_supervisor(self):
+        """Test PN-Supervisor role."""
+        roles = decode_device_role(DEVICE_ROLE_PN_SUPERVISOR)
+        assert roles == ["PN-Supervisor"]
+
+    def test_combined_roles(self):
+        """Test combined roles."""
+        roles = decode_device_role(0x03)  # IO-Device + IO-Controller
+        assert "IO-Device" in roles
+        assert "IO-Controller" in roles
+        assert len(roles) == 2
+
+    def test_all_roles(self):
+        """Test all roles combined."""
+        roles = decode_device_role(0x0F)  # All 4 roles
+        assert len(roles) == 4
+
+    def test_unknown_role(self):
+        """Test unknown role returns Unknown."""
+        roles = decode_device_role(0x00)
+        assert roles == ["Unknown"]
+
+
+class TestGetBlockName:
+    """Test get_block_name function."""
+
+    def test_ip_option(self):
+        """Test IP option names."""
+        assert get_block_name(0x01, 0x01) == "IP/MAC"
+        assert get_block_name(0x01, 0x02) == "IP/IP"
+        assert get_block_name(0x01, 0x03) == "IP/FullIPSuite"
+
+    def test_device_option(self):
+        """Test Device option names."""
+        assert get_block_name(0x02, 0x01) == "Device/Type"
+        assert get_block_name(0x02, 0x02) == "Device/Name"
+        assert get_block_name(0x02, 0x03) == "Device/DeviceID"
+        assert get_block_name(0x02, 0x04) == "Device/Role"
+        assert get_block_name(0x02, 0x05) == "Device/Options"
+        assert get_block_name(0x02, 0x07) == "Device/Instance"
+
+    def test_control_option(self):
+        """Test Control option names."""
+        assert get_block_name(0x05, 0x01) == "Control/Start"
+        assert get_block_name(0x05, 0x03) == "Control/Signal"
+        assert get_block_name(0x05, 0x06) == "Control/ResetToFactory"
+
+    def test_vendor_option(self):
+        """Test vendor-specific option range."""
+        name = get_block_name(0x80, 0x01)
+        assert "Vendor-0x80" in name
+
+        name = get_block_name(0xFE, 0x05)
+        assert "Vendor-0xFE" in name
+
+    def test_unknown_option(self):
+        """Test unknown option."""
+        name = get_block_name(0x10, 0x99)
+        assert "Opt-0x10" in name
+        assert "0x99" in name
+
+    def test_unknown_suboption(self):
+        """Test known option with unknown suboption."""
+        name = get_block_name(0x02, 0xFF)
+        assert "Device/" in name
+        assert "0xFF" in name
+
+
+class TestDeviceRoleConstants:
+    """Test device role constants."""
+
+    def test_io_device_value(self):
+        """Test IO-Device constant."""
+        assert DEVICE_ROLE_IO_DEVICE == 0x01
+
+    def test_io_controller_value(self):
+        """Test IO-Controller constant."""
+        assert DEVICE_ROLE_IO_CONTROLLER == 0x02
+
+    def test_io_multidevice_value(self):
+        """Test IO-Multidevice constant."""
+        assert DEVICE_ROLE_IO_MULTIDEVICE == 0x04
+
+    def test_pn_supervisor_value(self):
+        """Test PN-Supervisor constant."""
+        assert DEVICE_ROLE_PN_SUPERVISOR == 0x08
 
 
 class TestPARAMS:
