@@ -167,8 +167,378 @@ UUID_PNIO_CONTROLLER = "dea00002-6c97-11d1-8271-00a02442df7d"  # PROFINET IO Con
 # PNIO Device Interface Version
 PNIO_DEVICE_INTERFACE_VERSION = 1
 
+# EPM constants
+EPM_LOOKUP = 0x02  # ept_lookup operation
+EPM_INQUIRY_ALL = 0x00  # Return all entries
+EPM_INQUIRY_INTERFACE = 0x01  # Filter by interface UUID
+
 DEFAULT_TIMEOUT = 5.0
 CONNECTION_TIMEOUT = 10
+
+
+# =============================================================================
+# EPM (Endpoint Mapper) Data Classes and Functions
+# =============================================================================
+
+
+@dataclass
+class EPMEndpoint:
+    """Parsed EPM endpoint entry.
+
+    Represents a single RPC endpoint discovered via Endpoint Mapper lookup.
+    """
+
+    interface_uuid: str = ""
+    interface_version_major: int = 0
+    interface_version_minor: int = 0
+    object_uuid: str = ""
+    protocol: str = ""
+    port: int = 0
+    address: str = ""
+
+    @property
+    def interface_name(self) -> str:
+        """Get human-readable interface name."""
+        names = {
+            UUID_PNIO_DEVICE.lower(): "PNIO-Device",
+            UUID_PNIO_CONTROLLER.lower(): "PNIO-Controller",
+            "dea00003-6c97-11d1-8271-00a02442df7d": "PNIO-Supervisor",
+            "dea00004-6c97-11d1-8271-00a02442df7d": "PNIO-ParameterServer",
+            UUID_EPM_V4.lower(): "EPM",
+        }
+        return names.get(self.interface_uuid.lower(), f"Unknown({self.interface_uuid})")
+
+
+def _uuid_bytes_to_string(data: bytes) -> str:
+    """Convert 16-byte UUID to string format.
+
+    DCE/RPC UUIDs are stored in mixed-endian format:
+    - First 3 fields are little-endian
+    - Last 2 fields are big-endian
+    """
+    if len(data) != 16:
+        return ""
+
+    # Parse fields (little-endian for first 3, big-endian for rest)
+    time_low = int.from_bytes(data[0:4], "little")
+    time_mid = int.from_bytes(data[4:6], "little")
+    time_hi = int.from_bytes(data[6:8], "little")
+    clock_seq = int.from_bytes(data[8:10], "big")
+    node = data[10:16].hex()
+
+    return f"{time_low:08x}-{time_mid:04x}-{time_hi:04x}-{clock_seq:04x}-{node}"
+
+
+def _string_to_uuid_bytes(uuid_str: str) -> bytes:
+    """Convert UUID string to 16-byte DCE/RPC format (mixed-endian)."""
+    parts = uuid_str.replace("-", "")
+    if len(parts) != 32:
+        raise ValueError(f"Invalid UUID string: {uuid_str}")
+
+    # Parse hex parts
+    time_low = int(parts[0:8], 16)
+    time_mid = int(parts[8:12], 16)
+    time_hi = int(parts[12:16], 16)
+    clock_seq = int(parts[16:20], 16)
+    node = bytes.fromhex(parts[20:32])
+
+    # Pack in mixed-endian format
+    result = bytearray()
+    result.extend(time_low.to_bytes(4, "little"))
+    result.extend(time_mid.to_bytes(2, "little"))
+    result.extend(time_hi.to_bytes(2, "little"))
+    result.extend(clock_seq.to_bytes(2, "big"))
+    result.extend(node)
+
+    return bytes(result)
+
+
+def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
+    """Parse an EPM tower structure to extract endpoint info.
+
+    Tower format (simplified):
+    - Floor count (2 bytes)
+    - For each floor:
+      - LHS length (2 bytes)
+      - LHS data (protocol identifier + data)
+      - RHS length (2 bytes)
+      - RHS data (address data)
+
+    Floor protocols:
+    - 0x0D: UUID (interface)
+    - 0x0D: UUID (transfer syntax)
+    - 0x0A: RPC connectionless (ncadg)
+    - 0x08: UDP
+    - 0x09: IP
+    """
+    if len(tower_data) < 4:
+        return None
+
+    try:
+        offset = 0
+        floor_count = int.from_bytes(tower_data[offset : offset + 2], "little")
+        offset += 2
+
+        endpoint = EPMEndpoint()
+
+        for floor_idx in range(floor_count):
+            if offset + 4 > len(tower_data):
+                break
+
+            # LHS (left-hand side) - protocol identifier
+            lhs_len = int.from_bytes(tower_data[offset : offset + 2], "little")
+            offset += 2
+
+            if offset + lhs_len > len(tower_data):
+                break
+
+            lhs_data = tower_data[offset : offset + lhs_len]
+            offset += lhs_len
+
+            # RHS (right-hand side) - address data
+            if offset + 2 > len(tower_data):
+                break
+
+            rhs_len = int.from_bytes(tower_data[offset : offset + 2], "little")
+            offset += 2
+
+            if offset + rhs_len > len(tower_data):
+                break
+
+            rhs_data = tower_data[offset : offset + rhs_len]
+            offset += rhs_len
+
+            # Parse floor based on protocol ID
+            if lhs_len >= 1:
+                protocol_id = lhs_data[0]
+
+                if protocol_id == 0x0D and lhs_len >= 19:
+                    # UUID floor (interface or transfer syntax)
+                    uuid_bytes = lhs_data[1:17]
+                    version_major = int.from_bytes(lhs_data[17:19], "little")
+
+                    if floor_idx == 0:
+                        # First UUID floor is the interface
+                        endpoint.interface_uuid = _uuid_bytes_to_string(uuid_bytes)
+                        endpoint.interface_version_major = version_major
+                        if rhs_len >= 2:
+                            endpoint.interface_version_minor = int.from_bytes(
+                                rhs_data[0:2], "little"
+                            )
+
+                elif protocol_id == 0x0A:
+                    # RPC connectionless (ncadg_ip_udp)
+                    endpoint.protocol = "ncadg_ip_udp"
+
+                elif protocol_id == 0x08 and rhs_len >= 2:
+                    # UDP port
+                    endpoint.port = int.from_bytes(rhs_data[0:2], "big")
+
+                elif protocol_id == 0x09 and rhs_len >= 4:
+                    # IP address
+                    endpoint.address = ".".join(str(b) for b in rhs_data[0:4])
+
+        return endpoint if endpoint.interface_uuid else None
+
+    except Exception as e:
+        logger.debug(f"Failed to parse EPM tower: {e}")
+        return None
+
+
+def epm_lookup(
+    ip: str,
+    port: int = RPC_PORT,
+    timeout: float = 5.0,
+    interface_filter: Optional[str] = None,
+) -> List[EPMEndpoint]:
+    """Query Endpoint Mapper for available RPC endpoints.
+
+    Sends an EPM lookup request to discover what RPC services
+    are available on a PROFINET device.
+
+    Args:
+        ip: Target IP address
+        port: RPC port (default: 34964)
+        timeout: Response timeout in seconds
+        interface_filter: Optional interface UUID to filter results
+
+    Returns:
+        List of EPMEndpoint objects describing available services
+
+    Example:
+        >>> endpoints = epm_lookup("192.168.1.100")
+        >>> for ep in endpoints:
+        ...     print(f"{ep.interface_name}: port {ep.port}")
+        PNIO-Device: port 34964
+    """
+    import struct
+    import os
+
+    # Build EPM lookup request
+    # RPC header
+    version = 4
+    packet_type = 0x00  # REQUEST
+    flags1 = 0x20  # Idempotent
+    flags2 = 0x00
+    drep = bytes([0x10, 0x00, 0x00])  # Little-endian, ASCII, IEEE float
+
+    # Generate random UUIDs for activity and object
+    activity_uuid = os.urandom(16)
+    object_uuid = bytes(16)  # NULL object UUID
+
+    # EPM interface UUID (little-endian format for DCE/RPC)
+    interface_uuid = _string_to_uuid_bytes(UUID_EPM_V4)
+
+    # Build RPC header (80 bytes)
+    rpc_header = struct.pack(
+        "<BBBB3sB16s16s16sIIIHHHHHBB",
+        version,  # version
+        packet_type,  # packet_type
+        flags1,  # flags1
+        flags2,  # flags2
+        drep,  # drep
+        0,  # serial_high
+        object_uuid,  # object_uuid
+        interface_uuid,  # interface_uuid
+        activity_uuid,  # activity_uuid
+        0,  # server_boot_time
+        3 << 16,  # interface_version (3.0 for EPM)
+        0,  # sequence_number
+        EPM_LOOKUP,  # operation_number (2 = ept_lookup)
+        0xFFFF,  # interface_hint
+        0xFFFF,  # activity_hint
+        0,  # length_of_body (filled later)
+        0,  # fragment_number
+        0,  # authentication_protocol
+        0,  # serial_low
+    )
+
+    # EPM lookup request body
+    # inquiry_type: 0 = all, 1 = by interface
+    inquiry_type = EPM_INQUIRY_INTERFACE if interface_filter else EPM_INQUIRY_ALL
+
+    # Object UUID (NULL)
+    object_uuid_body = bytes(16)
+
+    # Interface UUID filter (or NULL for all)
+    if interface_filter:
+        iface_uuid_body = _string_to_uuid_bytes(interface_filter)
+        iface_version = struct.pack("<HH", 1, 0)  # version 1.0
+    else:
+        iface_uuid_body = bytes(16)
+        iface_version = struct.pack("<HH", 0, 0)
+
+    # Build body
+    body = struct.pack("<I", inquiry_type)  # inquiry_type
+    body += object_uuid_body  # object UUID
+    body += iface_uuid_body  # interface UUID
+    body += iface_version  # interface version
+    body += struct.pack("<I", 0)  # vers_option
+    body += struct.pack("<I", 0)  # entry_handle (context for continuation)
+    body += struct.pack("<I", 100)  # max_ents (max entries to return)
+
+    # Update body length in header
+    rpc_header = rpc_header[:74] + struct.pack("<H", len(body)) + rpc_header[76:]
+
+    # Send request
+    sock = socket(AF_INET, SOCK_DGRAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.sendto(rpc_header + body, (ip, port))
+
+        # Receive response
+        try:
+            data, addr = sock.recvfrom(4096)
+        except SocketTimeout:
+            logger.debug(f"EPM lookup timeout for {ip}:{port}")
+            return []
+
+        if len(data) < 80:
+            logger.debug(f"EPM response too short: {len(data)} bytes")
+            return []
+
+        # Parse RPC header
+        resp_type = data[1]
+        if resp_type == 0x03:  # FAULT
+            logger.debug("EPM lookup returned FAULT")
+            return []
+        if resp_type != 0x02:  # Not RESPONSE
+            logger.debug(f"Unexpected RPC response type: {resp_type}")
+            return []
+
+        body_len = struct.unpack("<H", data[74:76])[0]
+        body_data = data[80 : 80 + body_len]
+
+        if len(body_data) < 12:
+            return []
+
+        # Parse EPM response body
+        offset = 0
+
+        # entry_handle (context for continuation)
+        # entry_handle = struct.unpack("<I", body_data[offset:offset+4])[0]
+        offset += 4
+
+        # num_ents (number of entries)
+        num_ents = struct.unpack("<I", body_data[offset : offset + 4])[0]
+        offset += 4
+
+        # Skip array metadata (max_count, offset, actual_count)
+        offset += 12
+
+        endpoints = []
+
+        for _ in range(num_ents):
+            if offset + 4 > len(body_data):
+                break
+
+            # Entry object UUID
+            if offset + 16 > len(body_data):
+                break
+            entry_object_uuid = _uuid_bytes_to_string(body_data[offset : offset + 16])
+            offset += 16
+
+            # Tower pointer (reference ID)
+            if offset + 4 > len(body_data):
+                break
+            offset += 4  # tower_p (pointer/reference)
+
+            # Annotation length
+            if offset + 4 > len(body_data):
+                break
+            annotation_len = struct.unpack("<I", body_data[offset : offset + 4])[0]
+            offset += 4
+
+            # Skip annotation string
+            offset += annotation_len
+            # Align to 4 bytes
+            offset = (offset + 3) & ~3
+
+            # Tower length
+            if offset + 4 > len(body_data):
+                break
+            tower_len = struct.unpack("<I", body_data[offset : offset + 4])[0]
+            offset += 4
+
+            # Tower data
+            if offset + tower_len > len(body_data):
+                break
+            tower_data = body_data[offset : offset + tower_len]
+            offset += tower_len
+            # Align to 4 bytes
+            offset = (offset + 3) & ~3
+
+            # Parse tower
+            endpoint = _parse_epm_tower(tower_data)
+            if endpoint:
+                endpoint.object_uuid = entry_object_uuid
+                endpoints.append(endpoint)
+
+        return endpoints
+
+    finally:
+        sock.close()
 
 
 def get_station_info(

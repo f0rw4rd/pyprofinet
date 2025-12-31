@@ -69,6 +69,7 @@ from .dcp import (
 from .rpc import (
     RPCCon,
     get_station_info,
+    epm_lookup,
     # Data classes
     PortStatistics,
     LinkData,
@@ -77,6 +78,7 @@ from .rpc import (
     DiagnosisEntry,
     ARInfo,
     LogEntry,
+    EPMEndpoint,
     MAU_TYPES,
     # RPC Constants
     RPC_PORT,
@@ -165,7 +167,7 @@ from .exceptions import (
     PermissionDeniedError,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __all__ = [
     # Protocol structures
     "EthernetHeader",
@@ -216,6 +218,8 @@ __all__ = [
     # RPC
     "RPCCon",
     "get_station_info",
+    "epm_lookup",
+    "EPMEndpoint",
     # RPC constants
     "RPC_PORT",
     "RPC_BIND_PORT",

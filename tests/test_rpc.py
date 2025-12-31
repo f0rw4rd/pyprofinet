@@ -667,6 +667,11 @@ from profinet.rpc import (
     UUID_PNIO_DEVICE,
     UUID_PNIO_CONTROLLER,
     PNIO_DEVICE_INTERFACE_VERSION,
+    EPMEndpoint,
+    epm_lookup,
+    _uuid_bytes_to_string,
+    _string_to_uuid_bytes,
+    _parse_epm_tower,
 )
 
 
@@ -737,3 +742,190 @@ class TestRPCConstantsExport:
         """Test UUID_PNIO_CONTROLLER can be imported from profinet package."""
         from profinet import UUID_PNIO_CONTROLLER
         assert UUID_PNIO_CONTROLLER == "dea00002-6c97-11d1-8271-00a02442df7d"
+
+
+class TestEPMEndpoint:
+    """Test EPMEndpoint data class."""
+
+    def test_epm_endpoint_defaults(self):
+        """Test EPMEndpoint default values."""
+        ep = EPMEndpoint()
+        assert ep.interface_uuid == ""
+        assert ep.interface_version_major == 0
+        assert ep.interface_version_minor == 0
+        assert ep.object_uuid == ""
+        assert ep.protocol == ""
+        assert ep.port == 0
+        assert ep.address == ""
+
+    def test_epm_endpoint_values(self):
+        """Test EPMEndpoint with values."""
+        ep = EPMEndpoint(
+            interface_uuid=UUID_PNIO_DEVICE,
+            interface_version_major=1,
+            interface_version_minor=0,
+            protocol="ncadg_ip_udp",
+            port=34964,
+            address="192.168.1.100"
+        )
+        assert ep.interface_uuid == UUID_PNIO_DEVICE
+        assert ep.port == 34964
+
+    def test_interface_name_pnio_device(self):
+        """Test interface_name property for PNIO Device."""
+        ep = EPMEndpoint(interface_uuid=UUID_PNIO_DEVICE)
+        assert ep.interface_name == "PNIO-Device"
+
+    def test_interface_name_pnio_controller(self):
+        """Test interface_name property for PNIO Controller."""
+        ep = EPMEndpoint(interface_uuid=UUID_PNIO_CONTROLLER)
+        assert ep.interface_name == "PNIO-Controller"
+
+    def test_interface_name_epm(self):
+        """Test interface_name property for EPM."""
+        ep = EPMEndpoint(interface_uuid=UUID_EPM_V4)
+        assert ep.interface_name == "EPM"
+
+    def test_interface_name_unknown(self):
+        """Test interface_name property for unknown UUID."""
+        ep = EPMEndpoint(interface_uuid="12345678-1234-1234-1234-123456789abc")
+        assert "Unknown" in ep.interface_name
+
+
+class TestUUIDConversion:
+    """Test UUID string/bytes conversion functions."""
+
+    def test_uuid_bytes_to_string_pnio_device(self):
+        """Test converting PNIO Device UUID bytes to string."""
+        # PNIO Device UUID in DCE/RPC format (mixed-endian)
+        uuid_bytes = bytes([
+            0x01, 0x00, 0xA0, 0xDE,  # time_low (LE)
+            0x97, 0x6C,              # time_mid (LE)
+            0xD1, 0x11,              # time_hi (LE)
+            0x82, 0x71,              # clock_seq (BE)
+            0x00, 0xA0, 0x24, 0x42, 0xDF, 0x7D  # node (BE)
+        ])
+        result = _uuid_bytes_to_string(uuid_bytes)
+        assert result == "dea00001-6c97-11d1-8271-00a02442df7d"
+
+    def test_uuid_bytes_to_string_null(self):
+        """Test converting NULL UUID bytes to string."""
+        uuid_bytes = bytes(16)
+        result = _uuid_bytes_to_string(uuid_bytes)
+        assert result == "00000000-0000-0000-0000-000000000000"
+
+    def test_uuid_bytes_to_string_invalid_length(self):
+        """Test converting invalid length returns empty string."""
+        result = _uuid_bytes_to_string(bytes(10))
+        assert result == ""
+
+    def test_string_to_uuid_bytes_pnio_device(self):
+        """Test converting PNIO Device UUID string to bytes."""
+        result = _string_to_uuid_bytes(UUID_PNIO_DEVICE)
+        assert len(result) == 16
+        # Verify round-trip
+        assert _uuid_bytes_to_string(result) == UUID_PNIO_DEVICE
+
+    def test_string_to_uuid_bytes_epm(self):
+        """Test converting EPM UUID string to bytes."""
+        result = _string_to_uuid_bytes(UUID_EPM_V4)
+        assert len(result) == 16
+        # Verify round-trip
+        assert _uuid_bytes_to_string(result) == UUID_EPM_V4
+
+    def test_string_to_uuid_bytes_invalid(self):
+        """Test converting invalid UUID string raises error."""
+        with pytest.raises(ValueError, match="Invalid UUID"):
+            _string_to_uuid_bytes("invalid-uuid")
+
+    def test_uuid_roundtrip(self):
+        """Test UUID conversion roundtrip for various UUIDs."""
+        uuids = [
+            UUID_NULL,
+            UUID_EPM_V4,
+            UUID_PNIO_DEVICE,
+            UUID_PNIO_CONTROLLER,
+        ]
+        for uuid_str in uuids:
+            uuid_bytes = _string_to_uuid_bytes(uuid_str)
+            result = _uuid_bytes_to_string(uuid_bytes)
+            assert result == uuid_str, f"Roundtrip failed for {uuid_str}"
+
+
+class TestParseEPMTower:
+    """Test EPM tower parsing."""
+
+    def test_parse_empty_tower(self):
+        """Test parsing empty tower returns None."""
+        result = _parse_epm_tower(bytes())
+        assert result is None
+
+    def test_parse_short_tower(self):
+        """Test parsing too short tower returns None."""
+        result = _parse_epm_tower(bytes(3))
+        assert result is None
+
+    def test_parse_minimal_tower(self):
+        """Test parsing minimal valid tower."""
+        # Floor count = 0
+        tower = bytes([0x00, 0x00])
+        result = _parse_epm_tower(tower)
+        # Should return None because no interface UUID was found
+        assert result is None
+
+    def test_parse_tower_with_uuid_floor(self):
+        """Test parsing tower with UUID floor."""
+        import struct
+
+        # Build a simple tower with one UUID floor
+        tower = bytearray()
+
+        # Floor count = 1
+        tower.extend(struct.pack("<H", 1))
+
+        # Floor 1: UUID floor
+        # LHS: protocol ID (0x0D) + UUID (16 bytes) + version (2 bytes) = 19 bytes
+        lhs = bytes([0x0D])  # Protocol ID for UUID
+        lhs += _string_to_uuid_bytes(UUID_PNIO_DEVICE)  # UUID
+        lhs += struct.pack("<H", 1)  # Version major
+
+        tower.extend(struct.pack("<H", len(lhs)))  # LHS length
+        tower.extend(lhs)  # LHS data
+
+        # RHS: version minor (2 bytes)
+        rhs = struct.pack("<H", 0)  # Version minor
+        tower.extend(struct.pack("<H", len(rhs)))  # RHS length
+        tower.extend(rhs)  # RHS data
+
+        result = _parse_epm_tower(bytes(tower))
+        assert result is not None
+        assert result.interface_uuid == UUID_PNIO_DEVICE
+        assert result.interface_version_major == 1
+        assert result.interface_version_minor == 0
+
+
+class TestEPMLookup:
+    """Test epm_lookup function."""
+
+    def test_epm_lookup_timeout(self):
+        """Test epm_lookup returns empty list on timeout."""
+        # Use a non-routable IP to force timeout
+        result = epm_lookup("192.0.2.1", timeout=0.5)  # TEST-NET-1
+        assert result == []
+
+    def test_epm_lookup_returns_list(self):
+        """Test epm_lookup returns a list."""
+        # Use localhost which should fail quickly
+        result = epm_lookup("127.0.0.1", timeout=0.5)
+        assert isinstance(result, list)
+
+    def test_epm_lookup_importable(self):
+        """Test epm_lookup is importable from package."""
+        from profinet import epm_lookup as epm_func
+        assert callable(epm_func)
+
+    def test_epm_endpoint_importable(self):
+        """Test EPMEndpoint is importable from package."""
+        from profinet import EPMEndpoint as EPMClass
+        ep = EPMClass()
+        assert ep.port == 0
