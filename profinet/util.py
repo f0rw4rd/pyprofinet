@@ -338,6 +338,41 @@ if sys.platform == "win32":
 
         return devices
 
+    def _resolve_friendly_name_to_guid(friendly_name: str) -> Optional[str]:
+        """Resolve a Windows friendly interface name to its adapter GUID.
+
+        Maps names like "Ethernet 3" to "{GUID}" by querying the Windows
+        registry under HKLM\\SYSTEM\\CurrentControlSet\\Control\\Network.
+
+        Returns:
+            The adapter GUID string (e.g., "{824533DB-...}"), or None if not found.
+        """
+        import winreg
+        try:
+            # Enumerate network adapter connections in the registry
+            base = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as net_key:
+                i = 0
+                while True:
+                    try:
+                        guid = winreg.EnumKey(net_key, i)
+                        i += 1
+                        if not guid.startswith("{"):
+                            continue
+                        conn_path = f"{base}\\{guid}\\Connection"
+                        try:
+                            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, conn_path) as conn_key:
+                                name, _ = winreg.QueryValueEx(conn_key, "Name")
+                                if name.lower() == friendly_name.lower():
+                                    return guid
+                        except OSError:
+                            continue
+                    except OSError:
+                        break
+        except OSError:
+            pass
+        return None
+
     def _resolve_pcap_device(interface: str) -> str:
         """Resolve a friendly interface name to the NPF device path.
 
@@ -382,6 +417,18 @@ if sys.platform == "win32":
             if iface_lower in name.lower() or iface_lower in desc.lower():
                 return name
 
+        # Windows friendly name resolution (e.g., "Ethernet 3" -> NPF device)
+        # Maps friendly names to adapter GUIDs via the Windows registry
+        guid = _resolve_friendly_name_to_guid(interface)
+        if guid:
+            npf_path = f"\\Device\\NPF_{guid}"
+            # Verify this device exists in pcap list
+            for name, desc in devices:
+                if guid.lower() in name.lower():
+                    return name
+            # Device exists in registry but not in pcap -- try anyway
+            return npf_path
+
         available = "\n".join(f"  [{i}] {name}  ({desc})" for i, (name, desc) in enumerate(devices))
         raise SocketError(
             f"Interface {interface!r} not found in pcap device list.\n"
@@ -409,6 +456,8 @@ if sys.platform == "win32":
                 SocketError: If Npcap is not installed or the device cannot be opened.
                 PermissionDeniedError: If the user lacks capture privileges.
             """
+            self._handle = None
+            self._pcap = None
             pcap = _get_pcap()
             device = _resolve_pcap_device(interface)
             errbuf = ctypes.create_string_buffer(PCAP_ERRBUF_SIZE)
