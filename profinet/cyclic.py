@@ -45,6 +45,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional, Tuple
 
+from .util import ethernet_socket as _ethernet_socket
 from .rt import (
     RTFrame,
     IOCRConfig,
@@ -320,25 +321,23 @@ class CyclicController:
         """True if controller is currently running."""
         return self._running
 
-    def _create_raw_socket(self) -> socket.socket:
+    def _create_raw_socket(self):
         """Create raw Ethernet socket.
+
+        Uses platform-abstracted ethernet_socket() from util (AF_PACKET on
+        Linux, NpcapSocket on Windows, PcapSocket on macOS).
 
         Returns:
             Configured socket
 
         Raises:
-            PermissionError: If raw socket requires root
+            PermissionError: If raw socket requires root/admin privileges
         """
         try:
-            sock = socket.socket(
-                socket.AF_PACKET,
-                socket.SOCK_RAW,
-                socket.htons(ETHERTYPE_PROFINET),
-            )
-            sock.bind((self.interface, 0))
+            sock = _ethernet_socket(self.interface, ETHERTYPE_PROFINET)
         except PermissionError as e:
             raise PermissionError(
-                f"Raw socket requires root privileges: {e}"
+                f"Raw socket requires root/admin privileges: {e}"
             ) from e
 
         # Non-blocking with short timeout for RX

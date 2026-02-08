@@ -3,7 +3,7 @@ Utility functions for PROFINET packet handling.
 
 Provides:
 - MAC/IP address conversion utilities
-- Socket creation helpers
+- Socket creation helpers (cross-platform: Linux AF_PACKET, Windows/macOS libpcap)
 - Packet structure factory (make_packet)
 - Timeout context manager
 
@@ -17,12 +17,11 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import sys
 import time
 from collections import OrderedDict, namedtuple
-from fcntl import ioctl
-from socket import AF_INET, AF_PACKET, SOCK_DGRAM, SOCK_RAW, htons, socket
 from struct import calcsize, pack, unpack
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 from .exceptions import InvalidIPError, InvalidMACError, PermissionDeniedError, SocketError
 
@@ -37,9 +36,6 @@ MAX_ETHERNET_FRAME = 1522
 PROFINET_ETHERTYPE = 0x8892
 VLAN_ETHERTYPE = 0x8100
 ETH_P_ALL = 0x0003  # Receive all Ethernet protocols
-
-# ioctl constants (Linux-specific)
-SIOCGIFHWADDR = 0x8927
 
 # Validation patterns
 MAC_PATTERN = re.compile(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
@@ -149,80 +145,913 @@ def decode_bytes(data: bytes) -> str:
 
 
 # =============================================================================
-# Socket Utilities
+# Socket Utilities — Platform Abstraction
 # =============================================================================
 
+if sys.platform == "win32":
+    # =========================================================================
+    # Windows: Npcap/WinPcap via ctypes (wpcap.dll)
+    # =========================================================================
+    import ctypes
+    import ctypes.wintypes
+    import socket as _socket_mod
 
-def get_mac(ifname: str) -> bytes:
-    """Get MAC address of network interface.
+    # ---- pcap ctypes bindings -----------------------------------------------
 
-    Args:
-        ifname: Network interface name (e.g., "eth0")
+    PCAP_ERRBUF_SIZE = 256
 
-    Returns:
-        6-byte MAC address
+    class _timeval(ctypes.Structure):
+        _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
 
-    Raises:
-        SocketError: If interface doesn't exist or ioctl fails
+    class _pcap_pkthdr(ctypes.Structure):
+        _fields_ = [
+            ("ts", _timeval),
+            ("caplen", ctypes.c_uint),
+            ("len", ctypes.c_uint),
+        ]
 
-    Note:
-        This function is Linux-specific (uses ioctl).
-    """
-    if not ifname:
-        raise SocketError("Interface name cannot be empty")
+    class _bpf_insn(ctypes.Structure):
+        _fields_ = [
+            ("code", ctypes.c_ushort),
+            ("jt", ctypes.c_ubyte),
+            ("jf", ctypes.c_ubyte),
+            ("k", ctypes.c_uint),
+        ]
 
-    try:
-        with socket(AF_INET, SOCK_DGRAM) as s:
-            info = ioctl(
-                s.fileno(),
-                SIOCGIFHWADDR,
-                pack("256s", bytes(ifname[:15], "ascii")),
+    class _bpf_program(ctypes.Structure):
+        _fields_ = [
+            ("bf_len", ctypes.c_uint),
+            ("bf_insns", ctypes.POINTER(_bpf_insn)),
+        ]
+
+    class _pcap_addr(ctypes.Structure):
+        pass
+
+    class _sockaddr(ctypes.Structure):
+        _fields_ = [("sa_family", ctypes.c_ushort), ("sa_data", ctypes.c_char * 14)]
+
+    _pcap_addr._fields_ = [
+        ("next", ctypes.POINTER(_pcap_addr)),
+        ("addr", ctypes.POINTER(_sockaddr)),
+        ("netmask", ctypes.POINTER(_sockaddr)),
+        ("broadaddr", ctypes.POINTER(_sockaddr)),
+        ("dstaddr", ctypes.POINTER(_sockaddr)),
+    ]
+
+    class _pcap_if_t(ctypes.Structure):
+        pass
+
+    _pcap_if_t._fields_ = [
+        ("next", ctypes.POINTER(_pcap_if_t)),
+        ("name", ctypes.c_char_p),
+        ("description", ctypes.c_char_p),
+        ("addresses", ctypes.POINTER(_pcap_addr)),
+        ("flags", ctypes.c_uint),
+    ]
+
+    # Opaque pcap_t handle
+    class _pcap_t(ctypes.Structure):
+        pass
+
+    def _load_pcap_dll():
+        """Load wpcap.dll (Npcap or WinPcap).
+
+        Npcap installs to System32\\Npcap, WinPcap to System32.
+        We try Npcap first (recommended), then fall back to WinPcap.
+        """
+        import os
+
+        npcap_path = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Npcap")
+        # Try Npcap directory first
+        if os.path.isdir(npcap_path):
+            try:
+                return ctypes.CDLL(os.path.join(npcap_path, "wpcap.dll"))
+            except OSError:
+                pass
+        # Fall back to system path (WinPcap or Npcap in WinPcap-compatible mode)
+        try:
+            return ctypes.CDLL("wpcap.dll")
+        except OSError:
+            raise SocketError(
+                "Npcap or WinPcap is required but not found. "
+                "Install Npcap from https://npcap.com/ "
+                "(enable 'WinPcap API-compatible Mode' during installation)."
             )
-        return info[18:24]
-    except OSError as e:
-        raise SocketError(f"Failed to get MAC address for {ifname!r}: {e}") from e
+
+    def _init_pcap_functions(lib):
+        """Set up argtypes/restype for all pcap functions we use."""
+        _pcap_t_p = ctypes.POINTER(_pcap_t)
+
+        lib.pcap_open_live.argtypes = [
+            ctypes.c_char_p,  # device
+            ctypes.c_int,     # snaplen
+            ctypes.c_int,     # promisc
+            ctypes.c_int,     # to_ms
+            ctypes.c_char_p,  # errbuf
+        ]
+        lib.pcap_open_live.restype = _pcap_t_p
+
+        lib.pcap_close.argtypes = [_pcap_t_p]
+        lib.pcap_close.restype = None
+
+        lib.pcap_sendpacket.argtypes = [
+            _pcap_t_p,
+            ctypes.POINTER(ctypes.c_ubyte),
+            ctypes.c_int,
+        ]
+        lib.pcap_sendpacket.restype = ctypes.c_int
+
+        lib.pcap_next_ex.argtypes = [
+            _pcap_t_p,
+            ctypes.POINTER(ctypes.POINTER(_pcap_pkthdr)),
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+        lib.pcap_next_ex.restype = ctypes.c_int
+
+        lib.pcap_compile.argtypes = [
+            _pcap_t_p,
+            ctypes.POINTER(_bpf_program),
+            ctypes.c_char_p,  # filter expression
+            ctypes.c_int,     # optimize
+            ctypes.c_uint,    # netmask
+        ]
+        lib.pcap_compile.restype = ctypes.c_int
+
+        lib.pcap_setfilter.argtypes = [_pcap_t_p, ctypes.POINTER(_bpf_program)]
+        lib.pcap_setfilter.restype = ctypes.c_int
+
+        lib.pcap_freecode.argtypes = [ctypes.POINTER(_bpf_program)]
+        lib.pcap_freecode.restype = None
+
+        lib.pcap_setnonblock.argtypes = [_pcap_t_p, ctypes.c_int, ctypes.c_char_p]
+        lib.pcap_setnonblock.restype = ctypes.c_int
+
+        lib.pcap_findalldevs.argtypes = [
+            ctypes.POINTER(ctypes.POINTER(_pcap_if_t)),
+            ctypes.c_char_p,
+        ]
+        lib.pcap_findalldevs.restype = ctypes.c_int
+
+        lib.pcap_freealldevs.argtypes = [ctypes.POINTER(_pcap_if_t)]
+        lib.pcap_freealldevs.restype = None
+
+        lib.pcap_geterr.argtypes = [_pcap_t_p]
+        lib.pcap_geterr.restype = ctypes.c_char_p
+
+        return lib
+
+    # Lazy-loaded singleton
+    _pcap_lib = None
+
+    def _get_pcap():
+        global _pcap_lib
+        if _pcap_lib is None:
+            _pcap_lib = _init_pcap_functions(_load_pcap_dll())
+        return _pcap_lib
+
+    # ---- Interface name resolution ------------------------------------------
+
+    def _pcap_list_devices() -> List[Tuple[str, str]]:
+        """List all pcap devices as (name, description) pairs.
+
+        Returns:
+            List of (device_name, description) tuples.
+            device_name is the NPF path, description is human-readable.
+        """
+        pcap = _get_pcap()
+        alldevs = ctypes.POINTER(_pcap_if_t)()
+        errbuf = ctypes.create_string_buffer(PCAP_ERRBUF_SIZE)
+
+        if pcap.pcap_findalldevs(ctypes.byref(alldevs), errbuf) != 0:
+            raise SocketError(f"pcap_findalldevs failed: {errbuf.value.decode()}")
+
+        devices = []
+        try:
+            dev = alldevs
+            while dev:
+                name = dev.contents.name.decode("utf-8", errors="replace") if dev.contents.name else ""
+                desc = dev.contents.description.decode("utf-8", errors="replace") if dev.contents.description else ""
+                devices.append((name, desc))
+                dev = dev.contents.next
+        finally:
+            pcap.pcap_freealldevs(alldevs)
+
+        return devices
+
+    def _resolve_pcap_device(interface: str) -> str:
+        """Resolve a friendly interface name to the NPF device path.
+
+        Accepts:
+        - Full NPF path (returned as-is): ``\\Device\\NPF_{GUID}``
+        - A GUID: ``{GUID}`` -> ``\\Device\\NPF_{GUID}``
+        - Friendly/description substring match (case-insensitive)
+        - Numeric index into the device list
+
+        Args:
+            interface: Interface identifier (name, GUID, description, or index)
+
+        Returns:
+            NPF device path string
+
+        Raises:
+            SocketError: If the interface cannot be resolved
+        """
+        # Already a full NPF path
+        if interface.startswith("\\Device\\NPF_") or interface.startswith("\\\\Device\\\\NPF_"):
+            return interface
+
+        # Bare GUID
+        if interface.startswith("{") and interface.endswith("}"):
+            return f"\\Device\\NPF_{interface}"
+
+        devices = _pcap_list_devices()
+        if not devices:
+            raise SocketError("No pcap devices found. Is Npcap installed?")
+
+        # Try numeric index
+        try:
+            idx = int(interface)
+            if 0 <= idx < len(devices):
+                return devices[idx][0]
+        except ValueError:
+            pass
+
+        # Case-insensitive substring match against name and description
+        iface_lower = interface.lower()
+        for name, desc in devices:
+            if iface_lower in name.lower() or iface_lower in desc.lower():
+                return name
+
+        available = "\n".join(f"  [{i}] {name}  ({desc})" for i, (name, desc) in enumerate(devices))
+        raise SocketError(
+            f"Interface {interface!r} not found in pcap device list.\n"
+            f"Available devices:\n{available}"
+        )
+
+    # ---- NpcapSocket wrapper ------------------------------------------------
+
+    class NpcapSocket:
+        """Raw Ethernet socket using Npcap/WinPcap on Windows.
+
+        Provides the same send/recv/close/settimeout API as a Linux AF_PACKET
+        socket so callers do not need platform-specific code.
+        """
+
+        def __init__(self, interface: str, ethertype: Optional[int] = None):
+            """Open a live pcap capture on the given interface.
+
+            Args:
+                interface: Network interface (friendly name, NPF path, or index)
+                ethertype: Optional EtherType to filter on. If ``None``, all
+                    Ethernet frames are captured (ETH_P_ALL equivalent).
+
+            Raises:
+                SocketError: If Npcap is not installed or the device cannot be opened.
+                PermissionDeniedError: If the user lacks capture privileges.
+            """
+            pcap = _get_pcap()
+            device = _resolve_pcap_device(interface)
+            errbuf = ctypes.create_string_buffer(PCAP_ERRBUF_SIZE)
+
+            self._handle = pcap.pcap_open_live(
+                device.encode("utf-8"),
+                65535,   # snaplen
+                1,       # promisc
+                1,       # read timeout in ms (low for responsiveness)
+                errbuf,
+            )
+            if not self._handle:
+                err_msg = errbuf.value.decode("utf-8", errors="replace")
+                if "permission" in err_msg.lower() or "access" in err_msg.lower():
+                    raise PermissionDeniedError(
+                        f"Administrator privileges required for raw capture: {err_msg}"
+                    )
+                raise SocketError(f"pcap_open_live failed on {device!r}: {err_msg}")
+
+            self._pcap = pcap
+            self._timeout: Optional[float] = None
+            self._interface = interface
+            self._device = device
+
+            # Apply BPF filter for ethertype
+            if ethertype is not None and ethertype != ETH_P_ALL:
+                self._set_filter(f"ether proto 0x{ethertype:04x}")
+
+        def _set_filter(self, expression: str) -> None:
+            """Compile and apply a BPF filter expression."""
+            filt = _bpf_program()
+            if self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0) != 0:
+                err = self._pcap.pcap_geterr(self._handle)
+                logger.warning(f"pcap_compile failed for {expression!r}: {err.decode() if err else 'unknown'}")
+                return
+            try:
+                if self._pcap.pcap_setfilter(self._handle, ctypes.byref(filt)) != 0:
+                    err = self._pcap.pcap_geterr(self._handle)
+                    logger.warning(f"pcap_setfilter failed: {err.decode() if err else 'unknown'}")
+            finally:
+                self._pcap.pcap_freecode(ctypes.byref(filt))
+
+        def send(self, data: bytes) -> int:
+            """Send a raw Ethernet frame.
+
+            Args:
+                data: Complete Ethernet frame (including dst/src MAC and EtherType)
+
+            Returns:
+                Number of bytes sent
+
+            Raises:
+                SocketError: If the send fails
+            """
+            buf = (ctypes.c_ubyte * len(data))(*data)
+            ret = self._pcap.pcap_sendpacket(self._handle, buf, len(data))
+            if ret != 0:
+                err = self._pcap.pcap_geterr(self._handle)
+                raise SocketError(f"pcap_sendpacket failed: {err.decode() if err else 'unknown'}")
+            return len(data)
+
+        def recv(self, bufsize: int = MAX_ETHERNET_FRAME) -> bytes:
+            """Receive a raw Ethernet frame.
+
+            Blocks up to the configured timeout (see ``settimeout``).
+
+            Args:
+                bufsize: Maximum bytes to return (frames larger than this are truncated)
+
+            Returns:
+                Raw Ethernet frame bytes
+
+            Raises:
+                socket.timeout: If no packet is received within the timeout period
+                SocketError: On capture error
+            """
+            header = ctypes.POINTER(_pcap_pkthdr)()
+            pkt_data = ctypes.POINTER(ctypes.c_ubyte)()
+
+            deadline = None
+            if self._timeout is not None:
+                deadline = time.monotonic() + self._timeout
+
+            while True:
+                ret = self._pcap.pcap_next_ex(
+                    self._handle, ctypes.byref(header), ctypes.byref(pkt_data)
+                )
+                if ret == 1:
+                    # Packet received
+                    length = min(header.contents.caplen, bufsize)
+                    return bytes(pkt_data[:length])
+                elif ret == 0:
+                    # Timeout from pcap_open_live read timeout — check deadline
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise _socket_mod.timeout("timed out")
+                    continue
+                else:
+                    # ret == -1 or -2: error or EOF
+                    err = self._pcap.pcap_geterr(self._handle)
+                    raise SocketError(f"pcap_next_ex error: {err.decode() if err else 'unknown'}")
+
+        def settimeout(self, timeout: Optional[float]) -> None:
+            """Set the receive timeout.
+
+            Args:
+                timeout: Timeout in seconds, or ``None`` for blocking
+            """
+            self._timeout = timeout
+
+        def close(self) -> None:
+            """Close the pcap handle."""
+            if self._handle:
+                self._pcap.pcap_close(self._handle)
+                self._handle = None
+
+        def fileno(self) -> int:
+            """Not supported on Windows pcap — raises OSError."""
+            raise OSError("fileno() is not supported for NpcapSocket on Windows")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+        def __del__(self):
+            self.close()
+
+    # ---- MAC address via GetAdaptersAddresses (iphlpapi.dll) ----------------
+
+    # Constants for GetAdaptersAddresses
+    _AF_UNSPEC = 0
+    _GAA_FLAG_INCLUDE_PREFIX = 0x0010
+    _ERROR_BUFFER_OVERFLOW = 111
+    _ERROR_SUCCESS = 0
+    _MAX_ADAPTER_ADDRESS_LENGTH = 8
+
+    class _SOCKET_ADDRESS(ctypes.Structure):
+        _fields_ = [
+            ("lpSockaddr", ctypes.c_void_p),
+            ("iSockaddrLength", ctypes.c_int),
+        ]
+
+    class _IP_ADAPTER_UNICAST_ADDRESS(ctypes.Structure):
+        pass
+
+    _IP_ADAPTER_UNICAST_ADDRESS._fields_ = [
+        ("Length", ctypes.c_ulong),
+        ("Flags", ctypes.wintypes.DWORD),
+        ("Next", ctypes.POINTER(_IP_ADAPTER_UNICAST_ADDRESS)),
+        ("Address", _SOCKET_ADDRESS),
+        ("PrefixOrigin", ctypes.c_int),
+        ("SuffixOrigin", ctypes.c_int),
+        ("DadState", ctypes.c_int),
+        ("ValidLifetime", ctypes.c_ulong),
+        ("PreferredLifetime", ctypes.c_ulong),
+        ("LeaseLifetime", ctypes.c_ulong),
+        ("OnLinkPrefixLength", ctypes.c_ubyte),
+    ]
+
+    class _IP_ADAPTER_ADDRESSES(ctypes.Structure):
+        pass
+
+    _IP_ADAPTER_ADDRESSES._fields_ = [
+        ("Length", ctypes.c_ulong),
+        ("IfIndex", ctypes.wintypes.DWORD),
+        ("Next", ctypes.POINTER(_IP_ADAPTER_ADDRESSES)),
+        ("AdapterName", ctypes.c_char_p),
+        ("FirstUnicastAddress", ctypes.POINTER(_IP_ADAPTER_UNICAST_ADDRESS)),
+        ("FirstAnycastAddress", ctypes.c_void_p),
+        ("FirstMulticastAddress", ctypes.c_void_p),
+        ("FirstDnsServerAddress", ctypes.c_void_p),
+        ("DnsSuffix", ctypes.c_wchar_p),
+        ("Description", ctypes.c_wchar_p),
+        ("FriendlyName", ctypes.c_wchar_p),
+        ("PhysicalAddress", ctypes.c_ubyte * _MAX_ADAPTER_ADDRESS_LENGTH),
+        ("PhysicalAddressLength", ctypes.wintypes.DWORD),
+        ("Flags", ctypes.wintypes.DWORD),
+        ("Mtu", ctypes.wintypes.DWORD),
+        ("IfType", ctypes.wintypes.DWORD),
+        ("OperStatus", ctypes.c_int),
+        # Many more fields follow but we only need up to PhysicalAddress
+    ]
+
+    def get_mac(ifname: str) -> bytes:
+        """Get MAC address of network interface (Windows).
+
+        Queries ``GetAdaptersAddresses`` from ``iphlpapi.dll`` and matches
+        the adapter by friendly name, description, or adapter GUID.
+
+        Args:
+            ifname: Network interface name (friendly name like "Ethernet",
+                adapter name like ``{GUID}``, or description substring)
+
+        Returns:
+            6-byte MAC address
+
+        Raises:
+            SocketError: If interface is not found or API call fails
+        """
+        if not ifname:
+            raise SocketError("Interface name cannot be empty")
+
+        iphlpapi = ctypes.windll.iphlpapi
+
+        # First call: get required buffer size
+        buf_size = ctypes.c_ulong(0)
+        ret = iphlpapi.GetAdaptersAddresses(
+            _AF_UNSPEC, _GAA_FLAG_INCLUDE_PREFIX, None, None, ctypes.byref(buf_size)
+        )
+        if ret != _ERROR_BUFFER_OVERFLOW:
+            raise SocketError(f"GetAdaptersAddresses sizing failed (error {ret})")
+
+        # Allocate buffer and retrieve data
+        buf = ctypes.create_string_buffer(buf_size.value)
+        adapter_p = ctypes.cast(buf, ctypes.POINTER(_IP_ADAPTER_ADDRESSES))
+        ret = iphlpapi.GetAdaptersAddresses(
+            _AF_UNSPEC, _GAA_FLAG_INCLUDE_PREFIX, None, adapter_p, ctypes.byref(buf_size)
+        )
+        if ret != _ERROR_SUCCESS:
+            raise SocketError(f"GetAdaptersAddresses failed (error {ret})")
+
+        # Walk linked list, match by name
+        ifname_lower = ifname.lower()
+        while adapter_p:
+            a = adapter_p.contents
+            friendly = a.FriendlyName or ""
+            desc = a.Description or ""
+            adapter_name = a.AdapterName.decode("utf-8", errors="replace") if a.AdapterName else ""
+
+            if (
+                ifname_lower == friendly.lower()
+                or ifname_lower == desc.lower()
+                or ifname_lower in friendly.lower()
+                or ifname_lower in desc.lower()
+                or ifname_lower in adapter_name.lower()
+            ):
+                length = a.PhysicalAddressLength
+                if length >= 6:
+                    return bytes(a.PhysicalAddress[:6])
+
+            adapter_p = a.Next
+
+        raise SocketError(
+            f"No adapter matching {ifname!r} found via GetAdaptersAddresses"
+        )
+
+    def ethernet_socket(interface: str, ethertype: int = None) -> NpcapSocket:
+        """Create raw Ethernet socket bound to interface (Windows).
+
+        Uses Npcap/WinPcap via ctypes for raw packet capture and injection.
+
+        Args:
+            interface: Network interface (friendly name, NPF path, GUID, or index)
+            ethertype: Ethernet type to filter. If ``None``, receives all packets.
+
+        Returns:
+            NpcapSocket instance with send/recv/close/settimeout API
+
+        Raises:
+            PermissionDeniedError: If not running as Administrator
+            SocketError: If Npcap is not installed or socket creation fails
+        """
+        if not interface:
+            raise SocketError("Interface name cannot be empty")
+
+        proto = ethertype if ethertype is not None else ETH_P_ALL
+        try:
+            return NpcapSocket(interface, proto)
+        except PermissionDeniedError:
+            raise
+        except SocketError:
+            raise
+        except Exception as e:
+            raise SocketError(f"Failed to create pcap socket on {interface!r}: {e}") from e
 
 
-def ethernet_socket(interface: str, ethertype: int = None) -> socket:
-    """Create raw Ethernet socket bound to interface.
+elif sys.platform == "darwin":
+    # =========================================================================
+    # macOS: libpcap via ctypes (libpcap.dylib — built-in)
+    # =========================================================================
+    # macOS has no AF_PACKET. It ships libpcap which we access the same way as
+    # Npcap on Windows, just with a different shared library name.
 
-    Args:
-        interface: Network interface name
-        ethertype: Ethernet type to filter. If None, receives all packets
-                   (needed for VLAN-tagged responses). Default: ETH_P_ALL.
+    import ctypes
+    import ctypes.util
+    import socket as _socket_mod
 
-    Returns:
-        Bound raw socket
+    # ---- pcap ctypes bindings (same structs as Windows) ---------------------
 
-    Raises:
-        PermissionDeniedError: If not running as root
-        SocketError: If socket creation or binding fails
+    PCAP_ERRBUF_SIZE = 256
 
-    Note:
-        This function is Linux-specific (uses AF_PACKET).
-        Uses ETH_P_ALL by default because some devices (e.g., Siemens S7-1200)
-        respond with VLAN-tagged frames (0x8100) even to non-VLAN requests.
-    """
-    if not interface:
-        raise SocketError("Interface name cannot be empty")
+    class _timeval(ctypes.Structure):
+        _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
 
-    # Default to ETH_P_ALL to capture VLAN-tagged responses
-    proto = ethertype if ethertype is not None else ETH_P_ALL
+    class _pcap_pkthdr(ctypes.Structure):
+        _fields_ = [
+            ("ts", _timeval),
+            ("caplen", ctypes.c_uint),
+            ("len", ctypes.c_uint),
+        ]
 
-    try:
-        s = socket(AF_PACKET, SOCK_RAW, htons(proto))
-        s.bind((interface, 0))
-        return s
-    except PermissionError as e:
-        raise PermissionDeniedError(
-            f"Root privileges required for raw socket access: {e}"
-        ) from e
-    except OSError as e:
-        raise SocketError(f"Failed to create socket on {interface!r}: {e}") from e
+    class _bpf_insn(ctypes.Structure):
+        _fields_ = [
+            ("code", ctypes.c_ushort),
+            ("jt", ctypes.c_ubyte),
+            ("jf", ctypes.c_ubyte),
+            ("k", ctypes.c_uint),
+        ]
+
+    class _bpf_program(ctypes.Structure):
+        _fields_ = [
+            ("bf_len", ctypes.c_uint),
+            ("bf_insns", ctypes.POINTER(_bpf_insn)),
+        ]
+
+    class _pcap_addr(ctypes.Structure):
+        pass
+
+    class _sockaddr(ctypes.Structure):
+        _fields_ = [("sa_family", ctypes.c_ushort), ("sa_data", ctypes.c_char * 14)]
+
+    _pcap_addr._fields_ = [
+        ("next", ctypes.POINTER(_pcap_addr)),
+        ("addr", ctypes.POINTER(_sockaddr)),
+        ("netmask", ctypes.POINTER(_sockaddr)),
+        ("broadaddr", ctypes.POINTER(_sockaddr)),
+        ("dstaddr", ctypes.POINTER(_sockaddr)),
+    ]
+
+    class _pcap_if_t(ctypes.Structure):
+        pass
+
+    _pcap_if_t._fields_ = [
+        ("next", ctypes.POINTER(_pcap_if_t)),
+        ("name", ctypes.c_char_p),
+        ("description", ctypes.c_char_p),
+        ("addresses", ctypes.POINTER(_pcap_addr)),
+        ("flags", ctypes.c_uint),
+    ]
+
+    class _pcap_t(ctypes.Structure):
+        pass
+
+    def _load_pcap_lib():
+        """Load libpcap on macOS."""
+        path = ctypes.util.find_library("pcap")
+        if path:
+            try:
+                return ctypes.CDLL(path)
+            except OSError:
+                pass
+        # Direct path fallback
+        for candidate in ("/usr/lib/libpcap.dylib", "/usr/local/lib/libpcap.dylib"):
+            try:
+                return ctypes.CDLL(candidate)
+            except OSError:
+                continue
+        raise SocketError("libpcap not found. Install Xcode Command Line Tools or libpcap.")
+
+    def _init_pcap_functions(lib):
+        """Set up argtypes/restype for pcap functions (macOS)."""
+        _pcap_t_p = ctypes.POINTER(_pcap_t)
+
+        lib.pcap_open_live.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
+        lib.pcap_open_live.restype = _pcap_t_p
+
+        lib.pcap_close.argtypes = [_pcap_t_p]
+        lib.pcap_close.restype = None
+
+        lib.pcap_sendpacket.argtypes = [_pcap_t_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int]
+        lib.pcap_sendpacket.restype = ctypes.c_int
+
+        lib.pcap_next_ex.argtypes = [
+            _pcap_t_p,
+            ctypes.POINTER(ctypes.POINTER(_pcap_pkthdr)),
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+        lib.pcap_next_ex.restype = ctypes.c_int
+
+        lib.pcap_compile.argtypes = [_pcap_t_p, ctypes.POINTER(_bpf_program), ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
+        lib.pcap_compile.restype = ctypes.c_int
+
+        lib.pcap_setfilter.argtypes = [_pcap_t_p, ctypes.POINTER(_bpf_program)]
+        lib.pcap_setfilter.restype = ctypes.c_int
+
+        lib.pcap_freecode.argtypes = [ctypes.POINTER(_bpf_program)]
+        lib.pcap_freecode.restype = None
+
+        lib.pcap_setnonblock.argtypes = [_pcap_t_p, ctypes.c_int, ctypes.c_char_p]
+        lib.pcap_setnonblock.restype = ctypes.c_int
+
+        lib.pcap_findalldevs.argtypes = [ctypes.POINTER(ctypes.POINTER(_pcap_if_t)), ctypes.c_char_p]
+        lib.pcap_findalldevs.restype = ctypes.c_int
+
+        lib.pcap_freealldevs.argtypes = [ctypes.POINTER(_pcap_if_t)]
+        lib.pcap_freealldevs.restype = None
+
+        lib.pcap_geterr.argtypes = [_pcap_t_p]
+        lib.pcap_geterr.restype = ctypes.c_char_p
+
+        return lib
+
+    _pcap_lib = None
+
+    def _get_pcap():
+        global _pcap_lib
+        if _pcap_lib is None:
+            _pcap_lib = _init_pcap_functions(_load_pcap_lib())
+        return _pcap_lib
+
+    class PcapSocket:
+        """Raw Ethernet socket using libpcap on macOS.
+
+        Same API as Linux AF_PACKET sockets (send/recv/close/settimeout).
+        """
+
+        def __init__(self, interface: str, ethertype: Optional[int] = None):
+            pcap = _get_pcap()
+            errbuf = ctypes.create_string_buffer(PCAP_ERRBUF_SIZE)
+
+            self._handle = pcap.pcap_open_live(
+                interface.encode("utf-8"),
+                65535,  # snaplen
+                1,      # promisc
+                1,      # read timeout ms
+                errbuf,
+            )
+            if not self._handle:
+                err_msg = errbuf.value.decode("utf-8", errors="replace")
+                if "permission" in err_msg.lower():
+                    raise PermissionDeniedError(f"Root privileges required: {err_msg}")
+                raise SocketError(f"pcap_open_live failed on {interface!r}: {err_msg}")
+
+            self._pcap = pcap
+            self._timeout: Optional[float] = None
+
+            if ethertype is not None and ethertype != ETH_P_ALL:
+                self._set_filter(f"ether proto 0x{ethertype:04x}")
+
+        def _set_filter(self, expression: str) -> None:
+            filt = _bpf_program()
+            if self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0) != 0:
+                return
+            try:
+                self._pcap.pcap_setfilter(self._handle, ctypes.byref(filt))
+            finally:
+                self._pcap.pcap_freecode(ctypes.byref(filt))
+
+        def send(self, data: bytes) -> int:
+            buf = (ctypes.c_ubyte * len(data))(*data)
+            ret = self._pcap.pcap_sendpacket(self._handle, buf, len(data))
+            if ret != 0:
+                err = self._pcap.pcap_geterr(self._handle)
+                raise SocketError(f"pcap_sendpacket failed: {err.decode() if err else 'unknown'}")
+            return len(data)
+
+        def recv(self, bufsize: int = MAX_ETHERNET_FRAME) -> bytes:
+            header = ctypes.POINTER(_pcap_pkthdr)()
+            pkt_data = ctypes.POINTER(ctypes.c_ubyte)()
+            deadline = None
+            if self._timeout is not None:
+                deadline = time.monotonic() + self._timeout
+
+            while True:
+                ret = self._pcap.pcap_next_ex(
+                    self._handle, ctypes.byref(header), ctypes.byref(pkt_data)
+                )
+                if ret == 1:
+                    length = min(header.contents.caplen, bufsize)
+                    return bytes(pkt_data[:length])
+                elif ret == 0:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise _socket_mod.timeout("timed out")
+                    continue
+                else:
+                    err = self._pcap.pcap_geterr(self._handle)
+                    raise SocketError(f"pcap_next_ex error: {err.decode() if err else 'unknown'}")
+
+        def settimeout(self, timeout: Optional[float]) -> None:
+            self._timeout = timeout
+
+        def close(self) -> None:
+            if self._handle:
+                self._pcap.pcap_close(self._handle)
+                self._handle = None
+
+        def fileno(self) -> int:
+            raise OSError("fileno() is not supported for PcapSocket on macOS")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+        def __del__(self):
+            self.close()
+
+    def get_mac(ifname: str) -> bytes:
+        """Get MAC address of network interface (macOS).
+
+        Uses ``ifconfig`` output parsing since macOS lacks AF_PACKET and
+        the ioctl approach differs from Linux.
+
+        Args:
+            ifname: Network interface name (e.g., "en0")
+
+        Returns:
+            6-byte MAC address
+
+        Raises:
+            SocketError: If interface is not found
+        """
+        if not ifname:
+            raise SocketError("Interface name cannot be empty")
+
+        import subprocess
+        try:
+            output = subprocess.check_output(
+                ["ifconfig", ifname], stderr=subprocess.DEVNULL, text=True
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise SocketError(f"Failed to get MAC for {ifname!r}: {e}") from e
+
+        for line in output.splitlines():
+            line = line.strip()
+            if line.startswith("ether "):
+                mac_str = line.split()[1]
+                # macOS uses single-digit hex (e.g., "a:b:c:d:e:f"), normalize
+                parts = mac_str.split(":")
+                if len(parts) == 6:
+                    return bytes(int(p, 16) for p in parts)
+
+        raise SocketError(f"No MAC address found for interface {ifname!r}")
+
+    def ethernet_socket(interface: str, ethertype: int = None) -> PcapSocket:
+        """Create raw Ethernet socket bound to interface (macOS).
+
+        Uses libpcap via ctypes for raw packet capture and injection.
+
+        Args:
+            interface: Network interface name (e.g., "en0")
+            ethertype: Ethernet type to filter. If ``None``, receives all packets.
+
+        Returns:
+            PcapSocket instance with send/recv/close/settimeout API
+
+        Raises:
+            PermissionDeniedError: If not running as root
+            SocketError: If socket creation fails
+        """
+        if not interface:
+            raise SocketError("Interface name cannot be empty")
+
+        proto = ethertype if ethertype is not None else ETH_P_ALL
+        try:
+            return PcapSocket(interface, proto)
+        except PermissionDeniedError:
+            raise
+        except SocketError:
+            raise
+        except Exception as e:
+            raise SocketError(f"Failed to create pcap socket on {interface!r}: {e}") from e
 
 
-def udp_socket(host: str, port: int, timeout: float = 5.0) -> socket:
+else:
+    # =========================================================================
+    # Linux: AF_PACKET (original implementation)
+    # =========================================================================
+    from fcntl import ioctl
+    from socket import AF_INET, AF_PACKET, SOCK_DGRAM, SOCK_RAW, htons, socket
+
+    # ioctl constants (Linux-specific)
+    SIOCGIFHWADDR = 0x8927
+
+    def get_mac(ifname: str) -> bytes:
+        """Get MAC address of network interface (Linux).
+
+        Args:
+            ifname: Network interface name (e.g., "eth0")
+
+        Returns:
+            6-byte MAC address
+
+        Raises:
+            SocketError: If interface doesn't exist or ioctl fails
+        """
+        if not ifname:
+            raise SocketError("Interface name cannot be empty")
+
+        try:
+            with socket(AF_INET, SOCK_DGRAM) as s:
+                info = ioctl(
+                    s.fileno(),
+                    SIOCGIFHWADDR,
+                    pack("256s", bytes(ifname[:15], "ascii")),
+                )
+            return info[18:24]
+        except OSError as e:
+            raise SocketError(f"Failed to get MAC address for {ifname!r}: {e}") from e
+
+    def ethernet_socket(interface: str, ethertype: int = None) -> socket:
+        """Create raw Ethernet socket bound to interface (Linux).
+
+        Args:
+            interface: Network interface name
+            ethertype: Ethernet type to filter. If None, receives all packets
+                       (needed for VLAN-tagged responses). Default: ETH_P_ALL.
+
+        Returns:
+            Bound raw socket
+
+        Raises:
+            PermissionDeniedError: If not running as root
+            SocketError: If socket creation or binding fails
+
+        Note:
+            Uses ETH_P_ALL by default because some devices (e.g., Siemens S7-1200)
+            respond with VLAN-tagged frames (0x8100) even to non-VLAN requests.
+        """
+        if not interface:
+            raise SocketError("Interface name cannot be empty")
+
+        # Default to ETH_P_ALL to capture VLAN-tagged responses
+        proto = ethertype if ethertype is not None else ETH_P_ALL
+
+        try:
+            s = socket(AF_PACKET, SOCK_RAW, htons(proto))
+            s.bind((interface, 0))
+            return s
+        except PermissionError as e:
+            raise PermissionDeniedError(
+                f"Root privileges required for raw socket access: {e}"
+            ) from e
+        except OSError as e:
+            raise SocketError(f"Failed to create socket on {interface!r}: {e}") from e
+
+
+def udp_socket(host: str, port: int, timeout: float = 5.0):
     """Create connected UDP socket with timeout.
+
+    Works on all platforms (UDP does not require raw sockets).
 
     Args:
         host: Target hostname or IP
@@ -235,8 +1064,9 @@ def udp_socket(host: str, port: int, timeout: float = 5.0) -> socket:
     Raises:
         SocketError: If socket creation fails
     """
+    import socket as _sock
     try:
-        s = socket(AF_INET, SOCK_DGRAM)
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
         s.settimeout(timeout)
         s.connect((host, port))
         return s

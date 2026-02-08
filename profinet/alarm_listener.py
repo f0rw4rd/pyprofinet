@@ -21,6 +21,7 @@ from typing import Callable, List, Optional
 
 from .alarms import AlarmNotification, parse_alarm_notification
 from .protocol import PNAlarmAckPDU, PNBlockHeader, PNRTAHeader
+from .util import ethernet_socket
 
 logger = logging.getLogger(__name__)
 
@@ -174,30 +175,28 @@ class AlarmListener:
         """True if listener is currently running."""
         return self._running
 
-    def _create_socket(self) -> socket.socket:
+    def _create_socket(self):
         """Create raw socket for Layer 2 or UDP socket.
 
         Returns:
-            Configured socket for alarm reception
+            Configured socket for alarm reception.
+            For Layer 2: platform-abstracted raw socket (AF_PACKET on Linux,
+            NpcapSocket on Windows, PcapSocket on macOS).
+            For UDP: standard socket.
 
         Raises:
             PermissionError: If raw socket requires elevated privileges
         """
         if self.endpoint.transport == 0:
-            # Layer 2 raw socket (requires root/CAP_NET_RAW)
+            # Layer 2 raw socket via platform-abstracted ethernet_socket()
             try:
-                sock = socket.socket(
-                    socket.AF_PACKET,
-                    socket.SOCK_RAW,
-                    socket.htons(ETHERTYPE_PROFINET),
-                )
-                sock.bind((self.endpoint.interface, 0))
+                sock = ethernet_socket(self.endpoint.interface, ETHERTYPE_PROFINET)
             except PermissionError as e:
                 raise PermissionError(
-                    f"Raw socket requires root privileges: {e}"
+                    f"Raw socket requires root/admin privileges: {e}"
                 ) from e
         else:
-            # UDP socket (port 34964)
+            # UDP socket (port 34964) — works on all platforms
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", 34964))
