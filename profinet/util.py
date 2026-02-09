@@ -236,7 +236,7 @@ if sys.platform == "win32":
                 "Npcap or WinPcap is required but not found. "
                 "Install Npcap from https://npcap.com/ "
                 "(enable 'WinPcap API-compatible Mode' during installation)."
-            )
+            ) from None
 
     def _init_pcap_functions(lib):
         """Set up argtypes/restype for all pcap functions we use."""
@@ -423,7 +423,7 @@ if sys.platform == "win32":
         if guid:
             npf_path = f"\\Device\\NPF_{guid}"
             # Verify this device exists in pcap list
-            for name, desc in devices:
+            for name, _desc in devices:
                 if guid.lower() in name.lower():
                     return name
             # Device exists in registry but not in pcap -- try anyway
@@ -1145,7 +1145,7 @@ class MaxTimeout:
         self.seconds = seconds
         self._die_after: float = 0
 
-    def __enter__(self) -> "MaxTimeout":
+    def __enter__(self) -> MaxTimeout:
         self._die_after = time.monotonic() + self.seconds
         return self
 
@@ -1233,7 +1233,7 @@ def make_packet(
     class PacketClass(base_tuple):
         """Packet class created by make_packet factory."""
 
-        def __new__(cls, *args: Any, **kwargs: Any) -> "PacketClass":
+        def __new__(cls, *args: Any, **kwargs: Any) -> PacketClass:
             # Parse mode: single bytes argument
             if len(args) == 1 and isinstance(args[0], (bytes, memoryview)):
                 data = bytes(args[0])

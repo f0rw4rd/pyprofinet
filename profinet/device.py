@@ -18,24 +18,24 @@ Example:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
-from . import dcp
-from . import indices
-from . import blocks
+from . import dcp, indices
+from .alarm_listener import AlarmEndpoint, AlarmListener
+from .alarms import AlarmNotification, parse_alarm_notification
 from .blocks import (
     ModuleDiffBlock,
-    WriteMultipleResult,
     PDRealData,
-    RealIdentificationData,
     SlotInfo,
+    WriteMultipleResult,
 )
-from .rpc import (
-    RPCCon,
-    get_station_info,
-    epm_lookup,
-    EPMEndpoint,
+from .diagnosis import DiagnosisData
+from .exceptions import (
+    DCPDeviceNotFoundError,
+    PNIOError,
+    RPCConnectionError,
+    RPCError,
 )
 from .protocol import (
     PNInM0,
@@ -45,18 +45,12 @@ from .protocol import (
     PNInM4,
     PNInM5,
 )
-from .alarms import AlarmNotification, parse_alarm_notification
-from .alarm_listener import AlarmListener, AlarmEndpoint
-from .diagnosis import DiagnosisData
-from .util import ethernet_socket, get_mac
-from typing import Callable
-from .exceptions import (
-    DCPDeviceNotFoundError,
-    RPCError,
-    RPCConnectionError,
-    PNIOError,
+from .rpc import (
+    RPCCon,
+    epm_lookup,
+    get_station_info,
 )
-
+from .util import ethernet_socket, get_mac
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +101,11 @@ class scan:
     def __init__(self, interface: str = "eth0", timeout: float = 3.0):
         self.interface = interface
         self.timeout = timeout
-        self._devices: Optional[List["ProfinetDevice"]] = None
+        self._devices: Optional[List[ProfinetDevice]] = None
 
-    def _discover(self) -> List["ProfinetDevice"]:
+    def _discover(self) -> List[ProfinetDevice]:
         """Perform DCP discovery."""
-        from .dcp import send_discover, read_response
+        from .dcp import read_response, send_discover
 
         sock = ethernet_socket(self.interface)
         src_mac = get_mac(self.interface)
@@ -148,7 +142,7 @@ class scan:
         return self._devices[index]
 
 
-def scan_dict(interface: str = "eth0", timeout: float = 3.0) -> Dict[str, "DeviceInfo"]:
+def scan_dict(interface: str = "eth0", timeout: float = 3.0) -> Dict[str, DeviceInfo]:
     """Scan network and return device info dictionary.
 
     Args:
@@ -313,7 +307,7 @@ class ProfinetDevice:
         identifier: str,
         interface: str,
         timeout: float = 10.0,
-    ) -> "ProfinetDevice":
+    ) -> ProfinetDevice:
         """Discover device by station name or MAC address.
 
         Args:
@@ -344,7 +338,7 @@ class ProfinetDevice:
 
             if target_mac:
                 # Discovery by MAC address
-                from .dcp import send_discover, read_response
+                from .dcp import read_response, send_discover
                 send_discover(sock, src_mac)
                 responses = read_response(sock, src_mac, timeout_sec=int(timeout))
 
@@ -367,7 +361,7 @@ class ProfinetDevice:
         ip: str,
         interface: str,
         timeout: float = 10.0,
-    ) -> "ProfinetDevice":
+    ) -> ProfinetDevice:
         """Connect to device by IP address.
 
         Performs DCP discovery filtered by IP address.
@@ -389,7 +383,7 @@ class ProfinetDevice:
 
         try:
             # Discover all devices, filter by IP
-            from .dcp import send_discover, read_response
+            from .dcp import read_response, send_discover
             send_discover(sock, src_mac)
             responses = read_response(sock, src_mac, timeout_sec=int(timeout))
 
@@ -408,7 +402,7 @@ class ProfinetDevice:
         info: dcp.DCPDeviceDescription,
         interface: str,
         timeout: float = 5.0,
-    ) -> "ProfinetDevice":
+    ) -> ProfinetDevice:
         """Create device from existing DCP info.
 
         Useful when you have already performed DCP discovery.
@@ -473,7 +467,7 @@ class ProfinetDevice:
             self._connected = False
             logger.debug(f"Closed connection to {self._info.name}")
 
-    def __enter__(self) -> "ProfinetDevice":
+    def __enter__(self) -> ProfinetDevice:
         """Context manager entry - establishes connection."""
         self.connect()
         return self

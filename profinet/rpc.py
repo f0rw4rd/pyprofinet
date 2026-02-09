@@ -15,12 +15,27 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
-from socket import AF_INET, SOCK_DGRAM, socket, timeout as SocketTimeout
+from socket import AF_INET, SOCK_DGRAM, socket
+from socket import timeout as SocketTimeout
 from struct import pack, unpack
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from . import dcp
+from . import blocks, dcp, indices
+from .blocks import (
+    ExpectedSubmoduleBlockReq,
+    IODWriteMultipleBuilder,
+    ModuleDiffBlock,
+    WriteMultipleResult,
+    parse_module_diff_block,
+    parse_write_multiple_response,
+)
+from .diagnosis import (
+    DiagnosisData,
+    parse_diagnosis_block,
+    parse_diagnosis_simple,
+)
 from .exceptions import (
     DCPDeviceNotFoundError,
     PNIOError,
@@ -29,22 +44,13 @@ from .exceptions import (
     RPCFaultError,
     RPCTimeoutError,
 )
-from dataclasses import dataclass
-from typing import List
-
 from .protocol import (
-    PNARBlockRequest,
+    IOCRAPIObject,
     PNAlarmCRBlockReq,
     PNAlarmCRBlockRes,
+    PNARBlockRequest,
     PNBlockHeader,
     PNDCPBlock,
-    PNIODHeader,
-    PNIODReleaseBlock,
-    PNNRDData,
-    PNRPCHeader,
-    PNIOCRBlockReqHeader,
-    PNIOCRBlockRes,
-    IOCRAPIObject,
     PNInM0,
     PNInM1,
     PNInM2,
@@ -61,31 +67,13 @@ from .protocol import (
     PNInM13,
     PNInM14,
     PNInM15,
+    PNIOCRBlockReqHeader,
+    PNIOCRBlockRes,
+    PNIODHeader,
+    PNIODReleaseBlock,
+    PNNRDData,
+    PNRPCHeader,
 )
-from .diagnosis import (
-    DiagnosisData,
-    ChannelDiagnosis,
-    ExtChannelDiagnosis,
-    QualifiedChannelDiagnosis,
-    ChannelProperties,
-    parse_diagnosis_block,
-    parse_diagnosis_simple,
-    decode_channel_error_type,
-    decode_ext_channel_error_type,
-    CHANNEL_ERROR_TYPES,
-    EXT_CHANNEL_ERROR_TYPES_MAP,
-)
-from . import indices
-from . import blocks
-from .blocks import (
-    ModuleDiffBlock,
-    WriteMultipleResult,
-    IODWriteMultipleBuilder,
-    parse_module_diff_block,
-    parse_write_multiple_response,
-    ExpectedSubmoduleBlockReq,
-)
-
 
 # =============================================================================
 # Data Classes for Parsed Records
@@ -551,8 +539,8 @@ def epm_lookup(
         ...     print(f"{ep.interface_name}: port {ep.port}")
         PNIO-Device: port 34964
     """
-    import struct
     import os
+    import struct
 
     # Build EPM lookup request
     # RPC header
@@ -1116,14 +1104,14 @@ class RPCCon:
         except SocketTimeout:
             raise RPCTimeoutError(
                 f"No response from {self.info.name} ({self.info.ip})"
-            )
+            ) from None
         except OSError as e:
-            raise RPCError(f"Socket error: {e}")
+            raise RPCError(f"Socket error: {e}") from e
 
         try:
             rpc_resp = PNRPCHeader(data)
         except ValueError as e:
-            raise RPCError(f"Failed to parse RPC response: {e}")
+            raise RPCError(f"Failed to parse RPC response: {e}") from e
 
         # Validate response type
         if rpc_resp.packet_type == PNRPCHeader.FAULT:
@@ -1213,7 +1201,7 @@ class RPCCon:
             0x8892,  # UDP RT port
             2,  # Station name length
             cm_initiator_station_name=bytes("tp", encoding="utf-8"),
-            payload=bytes(),
+            payload=b"",
         )
 
         # Build NRD payload with AR block
@@ -1330,7 +1318,7 @@ class RPCCon:
             4096,  # length
             bytes(16),  # target_ar_uuid
             bytes(8),  # padding2
-            payload=bytes(),
+            payload=b"",
         )
 
         nrd = self._create_nrd(bytes(iod))
@@ -1379,7 +1367,7 @@ class RPCCon:
             4096,
             bytes(16),
             bytes(8),
-            payload=bytes(),
+            payload=b"",
         )
 
         nrd = self._create_nrd(bytes(iod))
@@ -1563,7 +1551,7 @@ class RPCCon:
         data = iod.payload
 
         # Skip block header
-        block = PNBlockHeader(data)
+        PNBlockHeader(data)  # validate block header
         data = data[6:]
 
         result: Dict[int, Dict[int, Tuple[int, Dict[int, int]]]] = {}
@@ -2127,7 +2115,7 @@ class RPCCon:
         ]
 
         results: Dict[int, DiagnosisData] = {}
-        for idx, api, slot, subslot in DIAGNOSIS_INDICES:
+        for idx, _api, slot, subslot in DIAGNOSIS_INDICES:
             try:
                 diag = self.read_diagnosis(slot=slot, subslot=subslot, index=idx)
                 if diag.entries:
@@ -2639,7 +2627,7 @@ class RPCCon:
             pass
         logger.debug(f"Closed connection to {self.info.name}")
 
-    def __enter__(self) -> "RPCCon":
+    def __enter__(self) -> RPCCon:
         return self
 
     def __exit__(self, *args: Any) -> None:

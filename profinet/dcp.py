@@ -18,15 +18,15 @@ import logging
 import random
 import struct
 import time
-from dataclasses import dataclass, field
-from socket import socket, timeout as SocketTimeout
+from dataclasses import dataclass
+from socket import socket
+from socket import timeout as SocketTimeout
 from struct import unpack
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .exceptions import DCPError, DCPDeviceNotFoundError, DCPTimeoutError
+from .exceptions import DCPError
 from .protocol import (
     EthernetHeader,
-    EthernetVLANHeader,
     PNDCPBlock,
     PNDCPBlockRequest,
     PNDCPHeader,
@@ -35,7 +35,6 @@ from .util import (
     MAX_ETHERNET_FRAME,
     PROFINET_ETHERTYPE,
     VLAN_ETHERTYPE,
-    ETH_P_ALL,
     ip2s,
     mac2s,
     max_timeout,
@@ -426,7 +425,7 @@ class DCPDHCPBlock:
     uuid: Optional[str] = None
 
     @classmethod
-    def parse(cls, suboption: int, data: bytes) -> "DCPDHCPBlock":
+    def parse(cls, suboption: int, data: bytes) -> DCPDHCPBlock:
         """Parse DHCP block data based on suboption type."""
         suboption_name = DCP_SUBOPTION_NAMES.get(0x03, {}).get(
             suboption, f"0x{suboption:02X}"
@@ -473,7 +472,7 @@ class DCPLLDPBlock:
     management_address: Optional[str] = None
 
     @classmethod
-    def parse(cls, suboption: int, data: bytes) -> "DCPLLDPBlock":
+    def parse(cls, suboption: int, data: bytes) -> DCPLLDPBlock:
         """Parse LLDP block data based on suboption type."""
         suboption_name = DCP_SUBOPTION_NAMES.get(0x04, {}).get(
             suboption, f"0x{suboption:02X}"
@@ -809,7 +808,7 @@ def get_param(
     param_tuple = PARAMS[param]
     xid = _generate_xid()
 
-    block = PNDCPBlockRequest(param_tuple[0], param_tuple[1], 0, payload=bytes())
+    block = PNDCPBlockRequest(param_tuple[0], param_tuple[1], 0, payload=b"")
     dcp = PNDCPHeader(
         DCP_GET_SET_FRAME_ID,
         PNDCPHeader.GET,
@@ -997,7 +996,7 @@ def send_discover(sock: socket, src: bytes, response_delay: int = 0x0080) -> Non
     """
     xid = _generate_xid()
 
-    block = PNDCPBlockRequest(0xFF, 0xFF, 0, payload=bytes())
+    block = PNDCPBlockRequest(0xFF, 0xFF, 0, payload=b"")
     dcp = PNDCPHeader(
         DCP_IDENTIFY_FRAME_ID,
         PNDCPHeader.IDENTIFY,

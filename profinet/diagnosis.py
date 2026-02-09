@@ -15,11 +15,11 @@ References:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import IntEnum, IntFlag
-from struct import unpack
-from typing import Dict, List, Optional, Tuple
 import logging
+from dataclasses import dataclass, field
+from enum import IntEnum
+from struct import unpack
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +265,7 @@ class ChannelProperties:
     direction: ChannelDirection = ChannelDirection.MANUFACTURER
 
     @classmethod
-    def from_uint16(cls, value: int) -> "ChannelProperties":
+    def from_uint16(cls, value: int) -> ChannelProperties:
         """Parse ChannelProperties from 16-bit value."""
         # Handle invalid enum values gracefully
         try:
@@ -444,7 +444,7 @@ def parse_diagnosis_block(
     # BlockType is 2 bytes, BlockLength is 2 bytes, version is 2 bytes
     if len(data) >= 4:
         block_type = unpack(">H", data[0:2])[0]
-        block_len = unpack(">H", data[2:4])[0]
+        _block_len = unpack(">H", data[2:4])[0]
         # Check if this looks like a block header
         if block_type in (0x0010, 0x0011, 0x0012, 0x8010, 0x8011, 0x8012):
             offset = 6  # Skip header

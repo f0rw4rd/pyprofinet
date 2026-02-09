@@ -19,7 +19,6 @@ import struct
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-
 # EtherType for PROFINET RT frames
 ETHERTYPE_PROFINET = 0x8892
 
@@ -193,7 +192,7 @@ class RTFrame:
     DATA_OK = DATA_STATUS_STATION_OK
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "RTFrame":
+    def from_bytes(cls, data: bytes) -> RTFrame:
         """Parse RT frame from raw bytes (after Ethernet header).
 
         Args:

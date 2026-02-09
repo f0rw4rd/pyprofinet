@@ -9,3 +9,16 @@ build/
 .mypy_cache/
 .ruff_cache/
 reference/
+
+# AI agents
+CLAUDE.md
+.claude/
+.cursorrules
+.cursorignore
+.cursor/
+.aider*
+.github/copilot-*
+.copilot/
+.codeium/
+.continue/
+.windsurf/

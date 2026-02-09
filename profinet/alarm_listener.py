@@ -235,7 +235,7 @@ class AlarmListener:
             return
 
         # Parse Ethernet header (14 bytes)
-        dst_mac = data[0:6]
+        _dst_mac = data[0:6]
         src_mac = data[6:12]
         ethertype = struct.unpack(">H", data[12:14])[0]
 
@@ -444,7 +444,7 @@ class AlarmListener:
         except Exception as e:
             logger.error(f"UDP send error: {e}")
 
-    def __enter__(self) -> "AlarmListener":
+    def __enter__(self) -> AlarmListener:
         """Context manager entry - start listener."""
         self.start()
         return self

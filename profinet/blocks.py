@@ -9,12 +9,11 @@ Block structures follow the standard format:
 - Variable body depending on block type
 """
 
+import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-import struct
 
 from . import indices
-
 
 # =============================================================================
 # Data Classes
@@ -214,7 +213,7 @@ def parse_multiple_block_header(
     offset += 2
 
     if len(data) < offset + 8:
-        raise ValueError(f"MultipleBlockHeader body requires 8 bytes after padding")
+        raise ValueError("MultipleBlockHeader body requires 8 bytes after padding")
 
     api, slot, subslot = struct.unpack_from(">IHH", data, offset)
 
@@ -256,7 +255,7 @@ def parse_pd_interface_data_real(data: bytes, offset: int = 0, block_header_size
     offset += 1
 
     if len(data) < offset + chassis_len:
-        raise ValueError(f"Truncated chassis ID")
+        raise ValueError("Truncated chassis ID")
 
     chassis_id = data[offset : offset + chassis_len].decode("latin-1", errors="replace")
     offset += chassis_len
@@ -266,7 +265,7 @@ def parse_pd_interface_data_real(data: bytes, offset: int = 0, block_header_size
 
     # MAC address (6 bytes)
     if len(data) < offset + 6:
-        raise ValueError(f"Truncated MAC address")
+        raise ValueError("Truncated MAC address")
     mac_address = data[offset : offset + 6]
     offset += 6
 
@@ -275,7 +274,7 @@ def parse_pd_interface_data_real(data: bytes, offset: int = 0, block_header_size
 
     # IP, Subnet, Gateway (4 bytes each)
     if len(data) < offset + 12:
-        raise ValueError(f"Truncated IP configuration")
+        raise ValueError("Truncated IP configuration")
 
     ip_address = data[offset : offset + 4]
     offset += 4

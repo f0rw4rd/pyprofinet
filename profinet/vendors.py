@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-
 profinet_vendor_map = {
     1: "Acromag",
     2: "Rockwell Automation",
@@ -2199,10 +2198,10 @@ profinet_vendor_map = {
 
 def get_vendor_name(vendor_id: int) -> str:
     """Get vendor name from PROFINET vendor ID.
-    
+
     Args:
         vendor_id: 16-bit PROFINET vendor ID
-        
+
     Returns:
         Vendor name or "Unknown (0xXXXX)" if not found
     """
@@ -2211,10 +2210,10 @@ def get_vendor_name(vendor_id: int) -> str:
 
 def lookup_vendor(vendor_id: int) -> Optional[str]:
     """Lookup vendor name, returning None if not found.
-    
+
     Args:
         vendor_id: 16-bit PROFINET vendor ID
-        
+
     Returns:
         Vendor name or None if not found
     """

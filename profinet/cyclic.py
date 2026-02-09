@@ -42,21 +42,21 @@ import socket
 import struct
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
-from .util import ethernet_socket as _ethernet_socket
 from .rt import (
-    RTFrame,
-    IOCRConfig,
-    CyclicDataBuilder,
-    ETHERTYPE_PROFINET,
-    DATA_STATUS_VALID,
     DATA_STATUS_PROVIDER_RUN,
-    DATA_STATUS_STATION_OK,
     DATA_STATUS_STATE,
+    DATA_STATUS_STATION_OK,
+    DATA_STATUS_VALID,
+    ETHERTYPE_PROFINET,
     IOXS_GOOD,
+    CyclicDataBuilder,
+    IOCRConfig,
+    RTFrame,
 )
+from .util import ethernet_socket as _ethernet_socket
 
 logger = logging.getLogger(__name__)
 
@@ -515,7 +515,7 @@ class CyclicController:
                         except Exception as e:
                             logger.error(f"Input callback error: {e}")
 
-    def __enter__(self) -> "CyclicController":
+    def __enter__(self) -> CyclicController:
         """Context manager entry - start controller."""
         self.start()
         return self

@@ -18,7 +18,6 @@ from typing import Tuple
 
 from .util import decode_bytes, mac2s, make_packet, s2ip
 
-
 # =============================================================================
 # DCP - Discovery and Configuration Protocol
 # =============================================================================

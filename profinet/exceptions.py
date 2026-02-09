@@ -348,7 +348,7 @@ class PNIOError(RPCError):
         self.error_code2 = error_code2
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "PNIOError":
+    def from_bytes(cls, data: bytes) -> PNIOError:
         """Create PNIOError from 4-byte error status.
 
         Args:
@@ -368,7 +368,7 @@ class PNIOError(RPCError):
         return cls._create_from_codes(error_code, error_decode, error_code1, error_code2)
 
     @classmethod
-    def from_args_status(cls, args_status: int) -> "PNIOError":
+    def from_args_status(cls, args_status: int) -> PNIOError:
         """Create PNIOError from ArgsStatus field.
 
         Note: make_packet parses ArgsMaximumStatus as big-endian (">I"),
@@ -405,7 +405,7 @@ class PNIOError(RPCError):
         error_decode: int,
         error_code1: int,
         error_code2: int,
-    ) -> "PNIOError":
+    ) -> PNIOError:
         """Create PNIOError with human-readable message from error codes."""
         key = (error_code1, error_code2)
 
@@ -425,13 +425,13 @@ class PNIOError(RPCError):
             elif key in cls.PNIORW_ERROR_MESSAGES:
                 msg = cls.PNIORW_ERROR_MESSAGES[key]
             else:
-                msg = f"Unknown PNIO error"
+                msg = "Unknown PNIO error"
         elif error_decode == cls.DECODE_PNIORW:
             # PNIO Read/Write error
             if key in cls.PNIORW_ERROR_MESSAGES:
                 msg = cls.PNIORW_ERROR_MESSAGES[key]
             else:
-                msg = f"Unknown PNIORW error"
+                msg = "Unknown PNIORW error"
         else:
             msg = f"Unknown error (Decode=0x{error_decode:02X})"
 
