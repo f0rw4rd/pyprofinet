@@ -13,7 +13,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from typing import Optional
 
 from . import dcp, rpc
 from .exceptions import (

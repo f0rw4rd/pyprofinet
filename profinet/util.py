@@ -20,8 +20,9 @@ import re
 import sys
 import time
 from collections import OrderedDict, namedtuple
+from collections.abc import Callable
 from struct import calcsize, pack, unpack
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 from .exceptions import InvalidIPError, InvalidMACError, PermissionDeniedError, SocketError
 
@@ -154,7 +155,6 @@ if sys.platform == "win32":
     # =========================================================================
     import ctypes
     import ctypes.wintypes
-    import socket as _socket_mod
 
     # ---- pcap ctypes bindings -----------------------------------------------
 
@@ -552,7 +552,7 @@ if sys.platform == "win32":
                 elif ret == 0:
                     # Timeout from pcap_open_live read timeout — check deadline
                     if deadline is not None and time.monotonic() >= deadline:
-                        raise _socket_mod.timeout("timed out")
+                        raise TimeoutError("timed out")
                     continue
                 else:
                     # ret == -1 or -2: error or EOF
@@ -744,7 +744,6 @@ elif sys.platform == "darwin":
 
     import ctypes
     import ctypes.util
-    import socket as _socket_mod
 
     # ---- pcap ctypes bindings (same structs as Windows) ---------------------
 
@@ -931,7 +930,7 @@ elif sys.platform == "darwin":
                     return bytes(pkt_data[:length])
                 elif ret == 0:
                     if deadline is not None and time.monotonic() >= deadline:
-                        raise _socket_mod.timeout("timed out")
+                        raise TimeoutError("timed out")
                     continue
                 else:
                     err = self._pcap.pcap_geterr(self._handle)
@@ -1171,7 +1170,7 @@ max_timeout = MaxTimeout
 # Packet Factory
 # =============================================================================
 
-FieldSpec = Union[str, Tuple[str, Union[str, Callable[[bytes], str]]]]
+FieldSpec = Union[str, Tuple[str, str | Callable[[bytes], str]]]
 
 
 def make_packet(

@@ -18,11 +18,11 @@ import logging
 import random
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from socket import socket
-from socket import timeout as SocketTimeout
 from struct import unpack
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .exceptions import DCPError
 from .protocol import (
@@ -899,7 +899,7 @@ def set_param(
         # Wait for device to process
         time.sleep(2)
         return True
-    except SocketTimeout:
+    except TimeoutError:
         logger.warning(f"No response from {target} for set_param")
         return False
 
@@ -978,7 +978,7 @@ def set_ip(
         # Wait for device to process
         time.sleep(2)
         return True
-    except SocketTimeout:
+    except TimeoutError:
         logger.warning(f"No response from {target} for set_ip")
         return False
 
@@ -1081,7 +1081,7 @@ def read_response(
             while not timer.timed_out:
                 try:
                     data = sock.recv(MAX_ETHERNET_FRAME)
-                except SocketTimeout:
+                except TimeoutError:
                     continue
                 except OSError as e:
                     logger.debug(f"Socket error during receive: {e}")
@@ -1310,7 +1310,7 @@ def receive_hello(
             while not timer.timed_out:
                 try:
                     data = sock.recv(MAX_ETHERNET_FRAME)
-                except SocketTimeout:
+                except TimeoutError:
                     continue
 
                 if len(data) < 14:
@@ -1439,7 +1439,7 @@ def signal_device(
     try:
         sock.recv(MAX_ETHERNET_FRAME)
         return True
-    except SocketTimeout:
+    except TimeoutError:
         logger.warning(f"No response from {target} for signal command")
         return False
 
@@ -1505,6 +1505,6 @@ def reset_to_factory(
         # Device needs time to reset
         time.sleep(2)
         return True
-    except SocketTimeout:
+    except TimeoutError:
         logger.warning(f"No response from {target} for reset command")
         return False

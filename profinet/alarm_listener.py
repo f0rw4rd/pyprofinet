@@ -16,8 +16,9 @@ import logging
 import socket
 import struct
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from .alarms import AlarmNotification, parse_alarm_notification
 from .protocol import PNAlarmAckPDU, PNBlockHeader, PNRTAHeader
@@ -215,7 +216,7 @@ class AlarmListener:
                     self._handle_layer2_frame()
                 else:
                     self._handle_udp_frame()
-            except socket.timeout:
+            except TimeoutError:
                 # Normal timeout, check if we should stop
                 continue
             except OSError as e:

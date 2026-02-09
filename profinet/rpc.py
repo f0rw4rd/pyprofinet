@@ -18,7 +18,6 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from socket import AF_INET, SOCK_DGRAM, socket
-from socket import timeout as SocketTimeout
 from struct import pack, unpack
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -618,7 +617,7 @@ def epm_lookup(
         # Receive response
         try:
             data, addr = sock.recvfrom(4096)
-        except SocketTimeout:
+        except TimeoutError:
             logger.debug(f"EPM lookup timeout for {ip}:{port}")
             return []
 
@@ -1101,7 +1100,7 @@ class RPCCon:
 
         try:
             data = self._socket.recvfrom(4096)[0]
-        except SocketTimeout:
+        except TimeoutError:
             raise RPCTimeoutError(
                 f"No response from {self.info.name} ({self.info.ip})"
             ) from None

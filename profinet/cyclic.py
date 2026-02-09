@@ -42,8 +42,9 @@ import socket
 import struct
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .rt import (
     DATA_STATUS_PROVIDER_RUN,
@@ -435,7 +436,7 @@ class CyclicController:
                 data = self._sock.recv(4096)
                 self._process_input_frame(data)
 
-            except socket.timeout:
+            except TimeoutError:
                 # Check watchdog
                 elapsed = time.perf_counter() - self.stats.last_receive_time
                 if elapsed > watchdog_s:
