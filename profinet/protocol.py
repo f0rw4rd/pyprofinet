@@ -193,7 +193,7 @@ PNRPCHeader = make_packet(
         "WRITE": 0x03,
         "CONTROL": 0x04,
         "IMPLICIT_READ": 0x05,
-        # Interface UUIDs
+        # Interface UUIDs (big-endian byte order, matching drep=0x00 in _create_rpc)
         "IFACE_UUID_DEVICE": bytes([0xDE, 0xA0, 0x00, 0x01] + _UUID),
         "IFACE_UUID_CONTROLLER": bytes([0xDE, 0xA0, 0x00, 0x02] + _UUID),
         "IFACE_UUID_SUPERVISOR": bytes([0xDE, 0xA0, 0x00, 0x03] + _UUID),
@@ -246,7 +246,7 @@ PNBlockHeader = make_packet(
     ),
     payload=False,
     statics={
-        "IDOReadRequestHeader": 0x0009,
+        "IODReadRequestHeader": 0x0009,
         "IODReadResponseHeader": 0x8009,
         "InM0": 0x0020,
         "InM0FilterDataSubModul": 0x0030,

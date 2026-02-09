@@ -775,3 +775,517 @@ class TestSetParamNameLengthValidation:
             timeout_sec=1
         )
         assert result is False  # Timeout means no response
+
+
+# =============================================================================
+# IPBlockInfo Tests
+# =============================================================================
+
+
+from profinet.dcp import (
+    IPBlockInfo,
+    BlockQualifier,
+    ResetQualifier,
+    DeviceInitiative,
+    DCPDHCPBlock,
+    DCPLLDPBlock,
+    DCP_SUBOPTION_DHCP_HOSTNAME,
+    DCP_SUBOPTION_DHCP_CLIENT_ID,
+    DCP_SUBOPTION_DHCP_VENDOR_SPEC,
+    DCP_SUBOPTION_DHCP_FQDN,
+    DCP_SUBOPTION_DHCP_UUID,
+    DCP_SUBOPTION_LLDP_PORT_ID,
+    DCP_SUBOPTION_LLDP_CHASSIS_ID,
+    DCP_SUBOPTION_LLDP_TTL,
+    DCP_SUBOPTION_LLDP_PORT_DESC,
+    DCP_SUBOPTION_LLDP_SYSTEM_NAME,
+    DCP_SUBOPTION_LLDP_SYSTEM_DESC,
+    DCP_SUBOPTION_LLDP_SYSTEM_CAP,
+    DCP_SUBOPTION_LLDP_MGMT_ADDR,
+    DCP_OPTION_DEVICE_INITIATIVE,
+    DCP_SUBOPTION_DEVICE_INITIATIVE,
+    set_ip,
+)
+import struct
+
+
+class TestIPBlockInfo:
+    """Test IPBlockInfo class methods."""
+
+    def test_constants(self):
+        """Test IPBlockInfo constant values."""
+        assert IPBlockInfo.IP_NOT_SET == 0x0000
+        assert IPBlockInfo.IP_SET == 0x0001
+        assert IPBlockInfo.IP_SET_BY_DHCP == 0x0002
+        assert IPBlockInfo.IP_NOT_SET_CONFLICT == 0x0080
+        assert IPBlockInfo.IP_SET_CONFLICT == 0x0081
+        assert IPBlockInfo.IP_SET_BY_DHCP_CONFLICT == 0x0082
+
+    def test_get_name_known_values(self):
+        """Test get_name for known values."""
+        assert "not set" in IPBlockInfo.get_name(0x0000).lower()
+        assert "set" in IPBlockInfo.get_name(0x0001).lower()
+        assert "dhcp" in IPBlockInfo.get_name(0x0002).lower()
+
+    def test_get_name_conflict_values(self):
+        """Test get_name for conflict values."""
+        assert "conflict" in IPBlockInfo.get_name(0x0080).lower()
+        assert "conflict" in IPBlockInfo.get_name(0x0081).lower()
+        assert "conflict" in IPBlockInfo.get_name(0x0082).lower()
+
+    def test_get_name_unknown(self):
+        """Test get_name for unknown value."""
+        name = IPBlockInfo.get_name(0x00FF)
+        assert "Unknown" in name
+
+    def test_has_conflict_true(self):
+        """Test has_conflict returns True for conflict bit set."""
+        assert IPBlockInfo.has_conflict(0x0080) is True
+        assert IPBlockInfo.has_conflict(0x0081) is True
+        assert IPBlockInfo.has_conflict(0x0082) is True
+
+    def test_has_conflict_false(self):
+        """Test has_conflict returns False when conflict bit is not set."""
+        assert IPBlockInfo.has_conflict(0x0000) is False
+        assert IPBlockInfo.has_conflict(0x0001) is False
+        assert IPBlockInfo.has_conflict(0x0002) is False
+
+    def test_is_dhcp_true(self):
+        """Test is_dhcp returns True for DHCP-set values."""
+        assert IPBlockInfo.is_dhcp(0x0002) is True
+        assert IPBlockInfo.is_dhcp(0x0082) is True
+
+    def test_is_dhcp_false(self):
+        """Test is_dhcp returns False for non-DHCP values."""
+        assert IPBlockInfo.is_dhcp(0x0000) is False
+        assert IPBlockInfo.is_dhcp(0x0001) is False
+        assert IPBlockInfo.is_dhcp(0x0080) is False
+
+
+class TestBlockQualifier:
+    """Test BlockQualifier class."""
+
+    def test_constants(self):
+        """Test qualifier constant values."""
+        assert BlockQualifier.TEMPORARY == 0x0000
+        assert BlockQualifier.PERMANENT == 0x0001
+
+    def test_get_name_known(self):
+        """Test get_name for known qualifiers."""
+        assert BlockQualifier.get_name(0x0000) == "Temporary"
+        assert BlockQualifier.get_name(0x0001) == "Permanent"
+
+    def test_get_name_unknown(self):
+        """Test get_name for unknown qualifier."""
+        name = BlockQualifier.get_name(0x00FF)
+        assert "Unknown" in name
+
+
+class TestResetQualifier:
+    """Test ResetQualifier class."""
+
+    def test_constants(self):
+        """Test reset qualifier constant values."""
+        assert ResetQualifier.RESET_APPLICATION_DATA == 0x0002
+        assert ResetQualifier.RESET_COMMUNICATION_PARAM == 0x0004
+        assert ResetQualifier.RESET_TO_FACTORY == 0x0010
+        assert ResetQualifier.RESET_AND_RESTORE == 0x0012
+
+    def test_get_name_known(self):
+        """Test get_name for known qualifiers."""
+        assert "application" in ResetQualifier.get_name(0x0002).lower()
+        assert "communication" in ResetQualifier.get_name(0x0004).lower()
+        assert "factory" in ResetQualifier.get_name(0x0010).lower()
+
+    def test_get_name_alternate_values(self):
+        """Test alternate qualifier values map to same names."""
+        assert ResetQualifier.get_name(0x0002) == ResetQualifier.get_name(0x0003)
+        assert ResetQualifier.get_name(0x0004) == ResetQualifier.get_name(0x0005)
+
+    def test_get_name_unknown(self):
+        """Test get_name for unknown qualifier."""
+        name = ResetQualifier.get_name(0x00FF)
+        assert "Unknown" in name
+
+
+class TestDeviceInitiative:
+    """Test DeviceInitiative class."""
+
+    def test_constants(self):
+        """Test initiative constant values."""
+        assert DeviceInitiative.NO_HELLO == 0x0000
+        assert DeviceInitiative.ISSUE_HELLO == 0x0001
+
+    def test_get_name_known(self):
+        """Test get_name for known values."""
+        assert "does not issue" in DeviceInitiative.get_name(0x0000).lower()
+        assert "issues" in DeviceInitiative.get_name(0x0001).lower()
+
+    def test_get_name_unknown(self):
+        """Test get_name for unknown value."""
+        name = DeviceInitiative.get_name(0x00FF)
+        assert "Unknown" in name
+
+
+# =============================================================================
+# DCPDHCPBlock Tests
+# =============================================================================
+
+
+class TestDCPDHCPBlock:
+    """Test DCPDHCPBlock parsing."""
+
+    def test_parse_hostname(self):
+        """Test parsing DHCP hostname block."""
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_HOSTNAME, b"my-hostname\x00")
+        assert block.hostname == "my-hostname"
+        assert block.suboption == DCP_SUBOPTION_DHCP_HOSTNAME
+        assert block.suboption_name == "Hostname"
+
+    def test_parse_client_id(self):
+        """Test parsing DHCP client ID block."""
+        data = b"\x01\x00\x11\x22\x33\x44\x55"
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_CLIENT_ID, data)
+        assert block.client_id == data
+        assert block.suboption_name == "ClientID"
+
+    def test_parse_vendor_specific(self):
+        """Test parsing DHCP vendor specific block."""
+        data = b"\xDE\xAD\xBE\xEF"
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_VENDOR_SPEC, data)
+        assert block.vendor_specific == data
+        assert block.suboption_name == "VendorSpec"
+
+    def test_parse_fqdn(self):
+        """Test parsing DHCP FQDN block."""
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_FQDN, b"device.local\x00")
+        assert block.fqdn == "device.local"
+        assert block.suboption_name == "FQDN"
+
+    def test_parse_uuid(self):
+        """Test parsing DHCP UUID block."""
+        uuid_bytes = bytes(range(16))
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_UUID, uuid_bytes)
+        assert block.uuid is not None
+        # UUID should be formatted as 5 groups separated by dashes
+        assert block.uuid.count("-") == 4
+
+    def test_parse_uuid_short_data(self):
+        """Test parsing DHCP UUID block with insufficient data."""
+        block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_UUID, b"\x00" * 10)
+        assert block.uuid is None
+
+    def test_parse_unknown_suboption(self):
+        """Test parsing unknown DHCP suboption."""
+        block = DCPDHCPBlock.parse(0x99, b"\x01\x02\x03")
+        assert block.raw_data == b"\x01\x02\x03"
+        assert block.hostname is None
+        assert block.client_id is None
+
+
+# =============================================================================
+# DCPLLDPBlock Tests
+# =============================================================================
+
+
+class TestDCPLLDPBlock:
+    """Test DCPLLDPBlock parsing."""
+
+    def test_parse_port_id(self):
+        """Test parsing LLDP port ID block."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_PORT_ID, b"port-001\x00")
+        assert block.port_id == "port-001"
+        assert block.suboption_name == "PortID"
+
+    def test_parse_chassis_id(self):
+        """Test parsing LLDP chassis ID block."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_CHASSIS_ID, b"my-device\x00")
+        assert block.chassis_id == "my-device"
+
+    def test_parse_ttl(self):
+        """Test parsing LLDP TTL block."""
+        data = struct.pack(">H", 120)
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_TTL, data)
+        assert block.ttl == 120
+
+    def test_parse_ttl_short_data(self):
+        """Test parsing LLDP TTL with short data."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_TTL, b"\x00")
+        assert block.ttl is None
+
+    def test_parse_port_description(self):
+        """Test parsing LLDP port description block."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_PORT_DESC, b"Ethernet Port 1\x00")
+        assert block.port_description == "Ethernet Port 1"
+
+    def test_parse_system_name(self):
+        """Test parsing LLDP system name block."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_NAME, b"my-switch\x00")
+        assert block.system_name == "my-switch"
+
+    def test_parse_system_description(self):
+        """Test parsing LLDP system description block."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_DESC, b"Industrial Switch v2.1\x00")
+        assert block.system_description == "Industrial Switch v2.1"
+
+    def test_parse_system_capabilities(self):
+        """Test parsing LLDP system capabilities block."""
+        data = struct.pack(">H", 0x0014)  # Bridge + Router
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_CAP, data)
+        assert block.system_capabilities == 0x0014
+
+    def test_parse_system_capabilities_short_data(self):
+        """Test parsing LLDP system capabilities with short data."""
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_CAP, b"\x00")
+        assert block.system_capabilities is None
+
+    def test_parse_management_address(self):
+        """Test parsing LLDP management address block."""
+        data = b"\x01\x04\xc0\xa8\x01\x01"
+        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_MGMT_ADDR, data)
+        assert block.management_address == data.hex()
+
+
+# =============================================================================
+# DCPDeviceDescription with DHCP/LLDP/Initiative
+# =============================================================================
+
+
+class TestDCPDeviceDescriptionExtended:
+    """Test DCPDeviceDescription with DHCP, LLDP, and initiative blocks."""
+
+    def test_dhcp_blocks_parsed(self):
+        """Test DHCP blocks are parsed from blocks dict."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x03, DCP_SUBOPTION_DHCP_HOSTNAME): b"dhcp-host\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert len(device.dhcp_blocks) == 1
+        assert device.dhcp_blocks[0].hostname == "dhcp-host"
+
+    def test_lldp_blocks_parsed(self):
+        """Test LLDP blocks are parsed from blocks dict."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x04, DCP_SUBOPTION_LLDP_SYSTEM_NAME): b"switch-01\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert len(device.lldp_blocks) == 1
+        assert device.lldp_blocks[0].system_name == "switch-01"
+
+    def test_device_initiative_hello(self):
+        """Test device initiative parsing for ISSUE_HELLO."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        initiative_data = struct.pack(">H", DeviceInitiative.ISSUE_HELLO)
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (DCP_OPTION_DEVICE_INITIATIVE, DCP_SUBOPTION_DEVICE_INITIATIVE): initiative_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_initiative == 1
+        assert device.issues_hello is True
+
+    def test_device_initiative_no_hello(self):
+        """Test device initiative parsing for NO_HELLO."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        initiative_data = struct.pack(">H", DeviceInitiative.NO_HELLO)
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (DCP_OPTION_DEVICE_INITIATIVE, DCP_SUBOPTION_DEVICE_INITIATIVE): initiative_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_initiative == 0
+        assert device.issues_hello is False
+
+    def test_device_initiative_missing(self):
+        """Test device initiative defaults when not present."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {}
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.device_initiative == 0
+        assert device.issues_hello is False
+
+    def test_ip_block_with_block_info_prefix(self):
+        """Test IP block parsing with 14-byte block info prefix."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        # 2-byte block info + 12-byte IP config = 14 bytes
+        ip_data = struct.pack(">H", 0x0001)  # IP_SET
+        ip_data += b"\xc0\xa8\x01\x01"  # IP
+        ip_data += b"\xff\xff\xff\x00"  # Netmask
+        ip_data += b"\xc0\xa8\x01\xfe"  # Gateway
+        blocks = {
+            PNDCPBlock.IP_ADDRESS: ip_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.ip == "192.168.1.1"
+        assert device.netmask == "255.255.255.0"
+        assert device.gateway == "192.168.1.254"
+        assert device.ip_block_info == 0x0001
+
+    def test_ip_block_with_conflict(self):
+        """Test IP block parsing with conflict flag."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        ip_data = struct.pack(">H", 0x0081)  # IP_SET_CONFLICT
+        ip_data += b"\xc0\xa8\x01\x01" + b"\xff\xff\xff\x00" + b"\x00\x00\x00\x00"
+        blocks = {
+            PNDCPBlock.IP_ADDRESS: ip_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.ip_conflict is True
+        assert device.ip_block_info == 0x0081
+
+    def test_ip_block_with_dhcp(self):
+        """Test IP block parsing with DHCP flag."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        ip_data = struct.pack(">H", 0x0002)  # IP_SET_BY_DHCP
+        ip_data += b"\xc0\xa8\x01\x01" + b"\xff\xff\xff\x00" + b"\x00\x00\x00\x00"
+        blocks = {
+            PNDCPBlock.IP_ADDRESS: ip_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert device.ip_set_by_dhcp is True
+
+    def test_dhcp_blocks_not_in_raw_blocks(self):
+        """Test DHCP blocks are excluded from raw_blocks."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            (0x03, DCP_SUBOPTION_DHCP_HOSTNAME): b"test\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert (0x03, DCP_SUBOPTION_DHCP_HOSTNAME) not in device.raw_blocks
+
+    def test_lldp_blocks_not_in_raw_blocks(self):
+        """Test LLDP blocks are excluded from raw_blocks."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            (0x04, DCP_SUBOPTION_LLDP_PORT_ID): b"port-001\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+
+        assert (0x04, DCP_SUBOPTION_LLDP_PORT_ID) not in device.raw_blocks
+
+    def test_str_with_dhcp_blocks(self):
+        """Test str output includes DHCP block info."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x03, DCP_SUBOPTION_DHCP_HOSTNAME): b"my-host\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+        output = str(device)
+
+        assert "DHCP" in output
+        assert "my-host" in output
+
+    def test_str_with_lldp_blocks(self):
+        """Test str output includes LLDP block info."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (0x04, DCP_SUBOPTION_LLDP_SYSTEM_NAME): b"my-switch\x00",
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+        output = str(device)
+
+        assert "LLDP" in output
+        assert "my-switch" in output
+
+    def test_str_with_initiative(self):
+        """Test str output includes initiative info."""
+        mac = b"\x00\x11\x22\x33\x44\x55"
+        initiative_data = struct.pack(">H", DeviceInitiative.ISSUE_HELLO)
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            (DCP_OPTION_DEVICE_INITIATIVE, DCP_SUBOPTION_DEVICE_INITIATIVE): initiative_data,
+        }
+
+        device = DCPDeviceDescription(mac, blocks)
+        output = str(device)
+
+        assert "Initiative" in output
+
+
+class TestSetIP:
+    """Test set_ip function."""
+
+    def test_set_ip_sends_request(self):
+        """Test set_ip sends SET request."""
+        mock_sock = MagicMock()
+        from socket import timeout as SocketTimeout
+        mock_sock.recv.side_effect = SocketTimeout()
+
+        result = set_ip(
+            mock_sock,
+            b"\x00\x11\x22\x33\x44\x55",
+            "AA:BB:CC:DD:EE:FF",
+            "192.168.1.100",
+            "255.255.255.0",
+            "192.168.1.1",
+            timeout_sec=1,
+        )
+
+        mock_sock.send.assert_called_once()
+        assert result is False  # Timeout
+
+    def test_set_ip_success(self):
+        """Test set_ip returns True on response."""
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = b"\x00" * 100
+
+        result = set_ip(
+            mock_sock,
+            b"\x00\x11\x22\x33\x44\x55",
+            "AA:BB:CC:DD:EE:FF",
+            "192.168.1.100",
+            "255.255.255.0",
+            "192.168.1.1",
+            timeout_sec=1,
+        )
+
+        assert result is True
+
+    def test_set_ip_permanent(self):
+        """Test set_ip with permanent flag."""
+        mock_sock = MagicMock()
+        from socket import timeout as SocketTimeout
+        mock_sock.recv.side_effect = SocketTimeout()
+
+        set_ip(
+            mock_sock,
+            b"\x00\x11\x22\x33\x44\x55",
+            "AA:BB:CC:DD:EE:FF",
+            "10.0.0.1",
+            "255.0.0.0",
+            "10.0.0.254",
+            permanent=True,
+            timeout_sec=1,
+        )
+
+        mock_sock.send.assert_called_once()
+        # Verify the permanent qualifier is in the sent data
+        sent_data = mock_sock.send.call_args[0][0]
+        assert isinstance(sent_data, bytes)

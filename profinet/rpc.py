@@ -582,7 +582,7 @@ def epm_lookup(
         interface_uuid,  # interface_uuid
         activity_uuid,  # activity_uuid
         0,  # server_boot_time
-        3 << 16,  # interface_version (3.0 for EPM)
+        3,  # interface_version (major=3, minor=0 for EPM)
         0,  # sequence_number
         EPM_LOOKUP,  # operation_number (2 = ept_lookup)
         0xFFFF,  # interface_hint
@@ -835,7 +835,7 @@ class RPCCon:
             PNRPCHeader.REQUEST,
             0x20,  # Flags1
             0x00,  # Flags2
-            bytes([0x00, 0x00, 0x00]),  # DRep (little-endian)
+            bytes([0x00, 0x00, 0x00]),  # DRep (big-endian, ASCII, IEEE float)
             0x00,  # Serial High
             self.remote_object_uuid,
             PNRPCHeader.IFACE_UUID_DEVICE,
@@ -1208,7 +1208,7 @@ class RPCCon:
             0x1234,  # Session key
             self.src_mac,
             self.local_object_uuid,
-            0x0131,  # AR Properties
+            0x0131,  # AR Properties (bits 0,4,5,8 set: supervisor-takeover, pull/plug allowed)
             100,  # Timeout factor
             0x8892,  # UDP RT port
             2,  # Station name length
@@ -1317,7 +1317,7 @@ class RPCCon:
         """
         self._check_timeout()
 
-        block = PNBlockHeader(PNBlockHeader.IDOReadRequestHeader, 60, 0x01, 0x00)
+        block = PNBlockHeader(PNBlockHeader.IODReadRequestHeader, 60, 0x01, 0x00)
         iod = PNIODHeader(
             bytes(block),
             0,  # sequence_number
@@ -1366,7 +1366,7 @@ class RPCCon:
         Returns:
             PNIODHeader containing response payload
         """
-        block = PNBlockHeader(PNBlockHeader.IDOReadRequestHeader, 60, 0x01, 0x00)
+        block = PNBlockHeader(PNBlockHeader.IODReadRequestHeader, 60, 0x01, 0x00)
         iod = PNIODHeader(
             bytes(block),
             0,
@@ -2338,12 +2338,12 @@ class RPCCon:
 
         return results
 
-    def discover_slots(
+    def scan_slots(
         self,
         max_slot: int = 16,
         subslots: Optional[List[int]] = None,
     ) -> Dict[Tuple[int, int], Dict[str, Any]]:
-        """Discover which slots and subslots have I&M0 data.
+        """Discover which slots and subslots have I&M0 data by scanning.
 
         Args:
             max_slot: Maximum slot number to scan
@@ -2523,7 +2523,7 @@ class RPCCon:
             logger.debug(f"Sent control 0x{control_command:04X} to {self.info.name}")
             return None
 
-        response = self._send_recv(rpc)
+        response = self._send_receive(rpc)
         return response
 
     def prm_begin(self) -> bytes:

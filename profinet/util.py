@@ -1146,7 +1146,7 @@ class MaxTimeout:
         self._die_after: float = 0
 
     def __enter__(self) -> "MaxTimeout":
-        self._die_after = time.time() + self.seconds
+        self._die_after = time.monotonic() + self.seconds
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -1155,12 +1155,12 @@ class MaxTimeout:
     @property
     def timed_out(self) -> bool:
         """Check if timeout has elapsed."""
-        return time.time() > self._die_after
+        return time.monotonic() > self._die_after
 
     @property
     def remaining(self) -> float:
         """Get remaining time in seconds."""
-        return max(0, self._die_after - time.time())
+        return max(0, self._die_after - time.monotonic())
 
 
 # Backwards compatibility alias

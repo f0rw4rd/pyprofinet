@@ -82,3 +82,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+markers = [
+    "integration: Integration tests requiring Docker + root (deselected by default)",
+]
+addopts = "-m 'not integration'"

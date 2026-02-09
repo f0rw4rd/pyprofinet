@@ -1,0 +1,28 @@
+# Docker Compose for profinet-py integration tests.
+#
+# Runs a PROFINET IO Device emulator (p-net stack) for testing DCP discovery,
+# RPC read/write, and I&M record access against a real(ish) device.
+#
+# Usage:
+#   docker compose up --build -d
+#   sudo pytest tests/integration/ -m integration -v
+#   docker compose down
+#
+# Requires host networking for Layer 2 (raw Ethernet) access.
+
+services:
+  profinet-device:
+    build:
+      context: /home/feb/pro/msf-ics/docker/mocks/services
+      dockerfile: Dockerfile.profinet
+    container_name: profinet-test-device
+    hostname: profinet-test-device
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      - PNET_STATION_NAME=test-pn-device
+      - PNET_INTERFACE=${PNET_INTERFACE:-eth0}
+      - PNET_VERBOSITY=2
+    restart: "no"

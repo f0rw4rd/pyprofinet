@@ -173,7 +173,7 @@ def parse_block_header(data: bytes, offset: int = 0) -> Tuple[BlockHeader, int]:
         raise ValueError(f"Block header requires 6 bytes, got {len(data) - offset}")
 
     block_type, block_length, ver_high, ver_low = struct.unpack_from(
-        ">HHBb", data, offset
+        ">HHBB", data, offset
     )
 
     header = BlockHeader(

@@ -893,6 +893,7 @@ def set_param(
     sock.send(bytes(eth))
 
     # Wait for response
+    # NOTE: SET response is not validated (status/error codes are not checked)
     sock.settimeout(float(timeout_sec))
     try:
         sock.recv(MAX_ETHERNET_FRAME)
@@ -971,6 +972,7 @@ def set_ip(
     sock.send(bytes(eth))
 
     # Wait for response
+    # NOTE: SET response is not validated (status/error codes are not checked)
     sock.settimeout(float(timeout_sec))
     try:
         sock.recv(MAX_ETHERNET_FRAME)

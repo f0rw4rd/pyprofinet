@@ -509,3 +509,670 @@ class TestRealDeviceData:
 
         # Check port subslot (slot 0, subslot 0x8001)
         assert result.slots[2].subslot == 0x8001
+
+
+# =============================================================================
+# ModuleDiffBlock (0x8104) Tests
+# =============================================================================
+
+
+class TestModuleDiffSubmodule:
+    """Tests for ModuleDiffSubmodule data class."""
+
+    def test_state_name_ok(self):
+        """Test state_name for OK submodule."""
+        sub = blocks.ModuleDiffSubmodule(
+            subslot_number=1,
+            submodule_ident_number=0x00000001,
+            submodule_state=indices.SUBMODULE_STATE_OK,
+        )
+        assert sub.state_name == "OK"
+        assert sub.is_ok is True
+
+    def test_state_name_wrong(self):
+        """Test state_name for wrong submodule."""
+        sub = blocks.ModuleDiffSubmodule(
+            subslot_number=1,
+            submodule_ident_number=0x00000001,
+            submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
+        )
+        assert sub.state_name == "WrongSubmodule"
+        assert sub.is_ok is False
+
+    def test_state_name_unknown(self):
+        """Test state_name for unknown state value."""
+        sub = blocks.ModuleDiffSubmodule(submodule_state=0xBEEF)
+        assert "Unknown" in sub.state_name
+        assert "0xBEEF" in sub.state_name
+
+    def test_no_submodule_state(self):
+        """Test NoSubmodule state."""
+        sub = blocks.ModuleDiffSubmodule(
+            submodule_state=indices.SUBMODULE_STATE_NO_SUBMODULE,
+        )
+        assert sub.state_name == "NoSubmodule"
+        assert sub.is_ok is False
+
+
+class TestModuleDiffModule:
+    """Tests for ModuleDiffModule data class."""
+
+    def test_state_name_proper(self):
+        """Test state_name for proper module."""
+        mod = blocks.ModuleDiffModule(
+            api=0,
+            slot_number=1,
+            module_ident_number=0x00010001,
+            module_state=indices.MODULE_STATE_PROPER_MODULE,
+        )
+        assert mod.state_name == "ProperModule"
+        assert mod.is_proper is True
+
+    def test_state_name_wrong(self):
+        """Test state_name for wrong module."""
+        mod = blocks.ModuleDiffModule(
+            module_state=indices.MODULE_STATE_WRONG_MODULE,
+        )
+        assert mod.state_name == "WrongModule"
+        assert mod.is_proper is False
+
+    def test_state_name_unknown(self):
+        """Test state_name for unknown state value."""
+        mod = blocks.ModuleDiffModule(module_state=0xDEAD)
+        assert "Unknown" in mod.state_name
+
+
+class TestModuleDiffBlock:
+    """Tests for ModuleDiffBlock data class and parsing."""
+
+    def test_all_ok_empty(self):
+        """Test all_ok returns True for empty module list."""
+        diff = blocks.ModuleDiffBlock(modules=[])
+        assert diff.all_ok is True
+
+    def test_all_ok_proper_and_ok(self):
+        """Test all_ok returns True when all modules are proper and submodules OK."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=0,
+                module_state=indices.MODULE_STATE_PROPER_MODULE,
+                submodules=[
+                    blocks.ModuleDiffSubmodule(
+                        subslot_number=1,
+                        submodule_state=indices.SUBMODULE_STATE_OK,
+                    ),
+                ],
+            ),
+        ])
+        assert diff.all_ok is True
+
+    def test_all_ok_wrong_module(self):
+        """Test all_ok returns False when a module is wrong."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=0,
+                module_state=indices.MODULE_STATE_WRONG_MODULE,
+            ),
+        ])
+        assert diff.all_ok is False
+
+    def test_all_ok_wrong_submodule(self):
+        """Test all_ok returns False when a submodule is wrong."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=0,
+                module_state=indices.MODULE_STATE_PROPER_MODULE,
+                submodules=[
+                    blocks.ModuleDiffSubmodule(
+                        subslot_number=1,
+                        submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
+                    ),
+                ],
+            ),
+        ])
+        assert diff.all_ok is False
+
+    def test_get_mismatches_empty(self):
+        """Test get_mismatches returns empty for all-OK block."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=0,
+                module_state=indices.MODULE_STATE_PROPER_MODULE,
+                submodules=[
+                    blocks.ModuleDiffSubmodule(
+                        subslot_number=1,
+                        submodule_state=indices.SUBMODULE_STATE_OK,
+                    ),
+                ],
+            ),
+        ])
+        assert diff.get_mismatches() == []
+
+    def test_get_mismatches_with_wrong_module(self):
+        """Test get_mismatches reports wrong module."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=3,
+                module_state=indices.MODULE_STATE_WRONG_MODULE,
+                submodules=[
+                    blocks.ModuleDiffSubmodule(
+                        subslot_number=1,
+                        submodule_state=indices.SUBMODULE_STATE_OK,
+                    ),
+                ],
+            ),
+        ])
+        mismatches = diff.get_mismatches()
+        assert len(mismatches) == 1
+        assert mismatches[0] == (3, 0, "WrongModule")
+
+    def test_get_mismatches_with_wrong_submodule(self):
+        """Test get_mismatches reports wrong submodule."""
+        diff = blocks.ModuleDiffBlock(modules=[
+            blocks.ModuleDiffModule(
+                slot_number=1,
+                module_state=indices.MODULE_STATE_PROPER_MODULE,
+                submodules=[
+                    blocks.ModuleDiffSubmodule(
+                        subslot_number=0x8001,
+                        submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
+                    ),
+                ],
+            ),
+        ])
+        mismatches = diff.get_mismatches()
+        assert len(mismatches) == 1
+        assert mismatches[0] == (1, 0x8001, "WrongSubmodule")
+
+
+class TestParseModuleDiffBlock:
+    """Tests for parse_module_diff_block function."""
+
+    def _build_module_diff_block(
+        self, apis_data, block_type=0x8104
+    ):
+        """Helper to build a ModuleDiffBlock from API data."""
+        # Block header: type(2) + length(2) + version(2)
+        body = struct.pack(">H", len(apis_data))  # NumberOfAPIs
+        for api, modules in apis_data:
+            body += struct.pack(">I", api)  # API
+            body += struct.pack(">H", len(modules))  # NumberOfModules
+            for slot, module_ident, module_state, submodules in modules:
+                body += struct.pack(">HIHH", slot, module_ident, module_state, len(submodules))
+                for subslot, submod_ident, submod_state in submodules:
+                    body += struct.pack(">HIH", subslot, submod_ident, submod_state)
+
+        block_len = len(body) + 2  # +2 for version bytes
+        header = struct.pack(">HHBB", block_type, block_len, 0x01, 0x00)
+        return header + body
+
+    def test_parse_single_api_single_module(self):
+        """Test parsing ModuleDiffBlock with one API and one module."""
+        data = self._build_module_diff_block([
+            (0, [  # API 0
+                (0, 0x00010001, 0x0002, [  # Slot 0, ProperModule
+                    (1, 0x00000001, 0x0007),  # Subslot 1, OK
+                ]),
+            ]),
+        ])
+
+        result = blocks.parse_module_diff_block(data)
+
+        assert len(result.modules) == 1
+        assert result.modules[0].api == 0
+        assert result.modules[0].slot_number == 0
+        assert result.modules[0].module_ident_number == 0x00010001
+        assert result.modules[0].module_state == 0x0002
+        assert result.modules[0].is_proper is True
+        assert len(result.modules[0].submodules) == 1
+        assert result.modules[0].submodules[0].subslot_number == 1
+        assert result.modules[0].submodules[0].is_ok is True
+        assert result.all_ok is True
+
+    def test_parse_multiple_apis(self):
+        """Test parsing ModuleDiffBlock with multiple APIs."""
+        data = self._build_module_diff_block([
+            (0, [  # API 0
+                (0, 0x00010001, 0x0002, [
+                    (1, 0x00000001, 0x0007),
+                ]),
+            ]),
+            (1, [  # API 1
+                (2, 0x00020002, 0x0002, [
+                    (1, 0x00000002, 0x0007),
+                ]),
+            ]),
+        ])
+
+        result = blocks.parse_module_diff_block(data)
+
+        assert len(result.modules) == 2
+        assert result.modules[0].api == 0
+        assert result.modules[1].api == 1
+        assert result.modules[1].slot_number == 2
+
+    def test_parse_wrong_block_type_raises(self):
+        """Test parsing with wrong block type raises ValueError."""
+        data = self._build_module_diff_block(
+            [(0, [])],
+            block_type=0x0400,  # Wrong type
+        )
+
+        with pytest.raises(ValueError, match="Expected block type 0x8104"):
+            blocks.parse_module_diff_block(data)
+
+    def test_parse_truncated_data(self):
+        """Test parsing truncated data returns empty block."""
+        result = blocks.parse_module_diff_block(b"\x81\x04\x00")
+        assert len(result.modules) == 0
+
+    def test_parse_empty_data(self):
+        """Test parsing empty data returns empty block."""
+        result = blocks.parse_module_diff_block(b"")
+        assert len(result.modules) == 0
+
+    def test_parse_multiple_submodules(self):
+        """Test parsing module with multiple submodules."""
+        data = self._build_module_diff_block([
+            (0, [
+                (0, 0x00010001, 0x0002, [
+                    (0x0001, 0x00000001, 0x0007),  # OK
+                    (0x8000, 0x00000002, 0x0007),  # OK
+                    (0x8001, 0x00000003, 0x0001),  # WrongSubmodule
+                ]),
+            ]),
+        ])
+
+        result = blocks.parse_module_diff_block(data)
+
+        assert len(result.modules[0].submodules) == 3
+        assert result.modules[0].submodules[0].is_ok is True
+        assert result.modules[0].submodules[1].is_ok is True
+        assert result.modules[0].submodules[2].is_ok is False
+        assert result.all_ok is False
+
+
+# =============================================================================
+# WriteMultipleResult Tests
+# =============================================================================
+
+
+class TestWriteMultipleResult:
+    """Tests for WriteMultipleResult data class."""
+
+    def test_success_property(self):
+        """Test success property returns True when status is 0."""
+        result = blocks.WriteMultipleResult(status=0)
+        assert result.success is True
+
+    def test_failure_property(self):
+        """Test success property returns False when status is non-zero."""
+        result = blocks.WriteMultipleResult(status=0x0001)
+        assert result.success is False
+
+    def test_all_fields(self):
+        """Test all fields are stored correctly."""
+        result = blocks.WriteMultipleResult(
+            seq_num=5,
+            api=0,
+            slot=1,
+            subslot=0x8001,
+            index=0xAFF0,
+            status=0,
+            additional_value1=0x1234,
+            additional_value2=0x5678,
+        )
+        assert result.seq_num == 5
+        assert result.api == 0
+        assert result.slot == 1
+        assert result.subslot == 0x8001
+        assert result.index == 0xAFF0
+        assert result.additional_value1 == 0x1234
+        assert result.additional_value2 == 0x5678
+
+
+class TestParseWriteMultipleResponse:
+    """Tests for parse_write_multiple_response function."""
+
+    def test_parse_empty_data(self):
+        """Test parsing data shorter than minimum returns empty list."""
+        assert blocks.parse_write_multiple_response(b"") == []
+        assert blocks.parse_write_multiple_response(b"\x00" * 32) == []
+
+    def test_parse_single_result(self):
+        """Test parsing response with single write result."""
+        # Build a minimal IODWriteMultipleRes header (64 bytes)
+        # followed by a single IODWriteRes block (0x8008)
+        header = bytearray(64)
+        # record_data_length at offset 36 (4 bytes)
+        record_len = 56  # One block
+        struct.pack_into(">I", header, 36, record_len)
+
+        # Build IODWriteRes block (0x8008)
+        block = bytearray(56)
+        struct.pack_into(">HH", block, 0, 0x8008, 52)  # block_type, block_len
+        struct.pack_into(">H", block, 6, 0)   # seq_num
+        struct.pack_into(">I", block, 24, 0)  # api
+        struct.pack_into(">H", block, 28, 1)  # slot
+        struct.pack_into(">H", block, 30, 1)  # subslot
+        struct.pack_into(">H", block, 34, 0xAFF1)  # index
+        struct.pack_into(">H", block, 40, 0)  # additional_value1
+        struct.pack_into(">H", block, 42, 0)  # additional_value2
+        struct.pack_into(">I", block, 44, 0)  # status (success)
+
+        data = bytes(header) + bytes(block)
+        results = blocks.parse_write_multiple_response(data)
+
+        assert len(results) == 1
+        assert results[0].slot == 1
+        assert results[0].subslot == 1
+        assert results[0].index == 0xAFF1
+        assert results[0].success is True
+
+
+# =============================================================================
+# IODWriteMultipleBuilder Tests
+# =============================================================================
+
+
+class TestIODWriteMultipleBuilder:
+    """Tests for IODWriteMultipleBuilder class."""
+
+    def test_builder_constants(self):
+        """Test builder class constants."""
+        assert blocks.IODWriteMultipleBuilder.INDEX == 0xE040
+        assert blocks.IODWriteMultipleBuilder.BLOCK_TYPE == 0x0008
+
+    def test_add_write_returns_self(self):
+        """Test add_write returns self for chaining."""
+        ar_uuid = b"\x00" * 16
+        builder = blocks.IODWriteMultipleBuilder(ar_uuid)
+        result = builder.add_write(0, 1, 0xAFF1, b"\x01\x02\x03")
+        assert result is builder
+
+    def test_build_single_write(self):
+        """Test building with single write operation."""
+        ar_uuid = b"\xAA" * 16
+        builder = blocks.IODWriteMultipleBuilder(ar_uuid)
+        builder.add_write(0, 1, 0xAFF1, b"\x01\x02\x03")
+
+        data = builder.build()
+
+        # Should produce outer header + inner block
+        assert len(data) > 64
+        # Outer header should have block type 0x0008
+        block_type = struct.unpack_from(">H", data, 0)[0]
+        assert block_type == 0x0008
+
+    def test_build_multiple_writes(self):
+        """Test building with multiple write operations."""
+        ar_uuid = b"\xBB" * 16
+        builder = blocks.IODWriteMultipleBuilder(ar_uuid)
+        builder.add_write(0, 1, 0xAFF1, b"\x01\x02")
+        builder.add_write(0, 1, 0xAFF2, b"\x03\x04")
+
+        data = builder.build()
+
+        # Should be larger than single write
+        assert len(data) > 128
+
+    def test_build_empty(self):
+        """Test building with no writes produces header only."""
+        ar_uuid = b"\x00" * 16
+        builder = blocks.IODWriteMultipleBuilder(ar_uuid)
+        data = builder.build()
+        # Should have outer header (64 bytes: 6 block_header + 58 body)
+        assert len(data) == 64
+
+    def test_chained_writes(self):
+        """Test chained add_write calls."""
+        ar_uuid = b"\x00" * 16
+        builder = blocks.IODWriteMultipleBuilder(ar_uuid)
+        builder.add_write(0, 1, 0xAFF1, b"\x01").add_write(0, 1, 0xAFF2, b"\x02")
+        assert len(builder.writes) == 2
+
+
+# =============================================================================
+# ExpectedSubmodule Tests
+# =============================================================================
+
+
+class TestExpectedSubmoduleDataDescription:
+    """Tests for ExpectedSubmoduleDataDescription."""
+
+    def test_to_bytes(self):
+        """Test serialization to bytes."""
+        dd = blocks.ExpectedSubmoduleDataDescription(
+            data_description=1,
+            submodule_data_length=10,
+            length_iocs=1,
+            length_iops=1,
+        )
+        data = dd.to_bytes()
+        assert len(data) == 6  # H(2) + H(2) + B(1) + B(1)
+        desc, length, iocs, iops = struct.unpack(">HHBB", data)
+        assert desc == 1
+        assert length == 10
+        assert iocs == 1
+        assert iops == 1
+
+
+class TestExpectedSubmodule:
+    """Tests for ExpectedSubmodule."""
+
+    def test_submodule_type_no_io(self):
+        """Test submodule type extraction for NO_IO."""
+        sm = blocks.ExpectedSubmodule(submodule_properties=0x0000)
+        assert sm.submodule_type == 0
+
+    def test_submodule_type_input(self):
+        """Test submodule type extraction for INPUT."""
+        sm = blocks.ExpectedSubmodule(submodule_properties=0x0001)
+        assert sm.submodule_type == 1
+
+    def test_submodule_type_output(self):
+        """Test submodule type extraction for OUTPUT."""
+        sm = blocks.ExpectedSubmodule(submodule_properties=0x0002)
+        assert sm.submodule_type == 2
+
+    def test_submodule_type_input_output(self):
+        """Test submodule type extraction for INPUT_OUTPUT."""
+        sm = blocks.ExpectedSubmodule(submodule_properties=0x0003)
+        assert sm.submodule_type == 3
+
+    def test_submodule_type_masked(self):
+        """Test submodule type only uses bottom 2 bits."""
+        sm = blocks.ExpectedSubmodule(submodule_properties=0xFF01)
+        assert sm.submodule_type == 1
+
+    def test_to_bytes_with_data_descriptions(self):
+        """Test serialization with data descriptions."""
+        dd = blocks.ExpectedSubmoduleDataDescription(1, 5, 1, 1)
+        sm = blocks.ExpectedSubmodule(
+            subslot_number=1,
+            submodule_ident_number=0x00000001,
+            submodule_properties=0x0001,
+            data_descriptions=[dd],
+        )
+        data = sm.to_bytes()
+        # H(2) + I(4) + H(2) + DD(6) = 14
+        assert len(data) == 14
+
+
+class TestExpectedSubmoduleAPI:
+    """Tests for ExpectedSubmoduleAPI."""
+
+    def test_to_bytes(self):
+        """Test serialization to bytes."""
+        api = blocks.ExpectedSubmoduleAPI(
+            api=0,
+            slot_number=0,
+            module_ident_number=0x00010001,
+            module_properties=0,
+            submodules=[],
+        )
+        data = api.to_bytes()
+        # I(4) + H(2) + I(4) + H(2) + H(2) = 14
+        assert len(data) == 14
+
+
+class TestExpectedSubmoduleBlockReq:
+    """Tests for ExpectedSubmoduleBlockReq builder."""
+
+    def test_block_type_constant(self):
+        """Test block type is 0x0104."""
+        assert blocks.ExpectedSubmoduleBlockReq.BLOCK_TYPE == 0x0104
+
+    def test_add_submodule_no_io(self):
+        """Test adding NO_IO submodule."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
+        assert len(builder.apis) == 1
+        assert len(builder.apis[0].submodules) == 1
+
+    def test_add_submodule_input(self):
+        """Test adding INPUT submodule creates input data description."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=1, input_length=10)
+        sm = builder.apis[0].submodules[0]
+        assert len(sm.data_descriptions) == 1
+        assert sm.data_descriptions[0].data_description == 1  # Input
+
+    def test_add_submodule_output(self):
+        """Test adding OUTPUT submodule creates output data description."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=2, output_length=8)
+        sm = builder.apis[0].submodules[0]
+        assert len(sm.data_descriptions) == 1
+        assert sm.data_descriptions[0].data_description == 2  # Output
+
+    def test_add_submodule_input_output(self):
+        """Test adding INPUT_OUTPUT submodule creates both data descriptions."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(
+            0, 0, 1, 0x00010001, 0x00000001,
+            submodule_type=3, input_length=10, output_length=8
+        )
+        sm = builder.apis[0].submodules[0]
+        assert len(sm.data_descriptions) == 2
+
+    def test_add_same_api_slot(self):
+        """Test adding submodules to same API/slot reuses entry."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
+        builder.add_submodule(0, 0, 0x8000, 0x00010001, 0x00000002, submodule_type=0)
+        assert len(builder.apis) == 1
+        assert len(builder.apis[0].submodules) == 2
+
+    def test_add_different_slot(self):
+        """Test adding submodules to different slots creates separate entries."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
+        builder.add_submodule(0, 1, 1, 0x00020002, 0x00000001, submodule_type=0)
+        assert len(builder.apis) == 2
+
+    def test_to_bytes_produces_valid_header(self):
+        """Test to_bytes produces block with correct header."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
+        data = builder.to_bytes()
+
+        # Parse block header
+        block_type, block_len, ver_hi, ver_lo = struct.unpack_from(">HHBB", data, 0)
+        assert block_type == 0x0104
+        assert ver_hi == 1
+        assert ver_lo == 0
+
+    def test_chained_add_submodule(self):
+        """Test add_submodule returns self for chaining."""
+        builder = blocks.ExpectedSubmoduleBlockReq()
+        result = builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
+        assert result is builder
+
+
+# =============================================================================
+# BlockHeader edge cases
+# =============================================================================
+
+
+class TestBlockHeaderEdgeCases:
+    """Additional edge case tests for BlockHeader."""
+
+    def test_body_length_with_zero_block_length(self):
+        """Test body_length returns 0 when block_length is 0."""
+        header = blocks.BlockHeader(block_type=0x0400, block_length=0, version_high=1, version_low=0)
+        assert header.body_length == 0
+
+    def test_body_length_with_length_one(self):
+        """Test body_length returns 0 when block_length is 1 (less than 2)."""
+        header = blocks.BlockHeader(block_type=0x0400, block_length=1, version_high=1, version_low=0)
+        assert header.body_length == 0
+
+    def test_body_length_exactly_two(self):
+        """Test body_length returns 0 when block_length is exactly 2."""
+        header = blocks.BlockHeader(block_type=0x0400, block_length=2, version_high=1, version_low=0)
+        assert header.body_length == 0
+
+    def test_body_length_three(self):
+        """Test body_length returns 1 when block_length is 3."""
+        header = blocks.BlockHeader(block_type=0x0400, block_length=3, version_high=1, version_low=0)
+        assert header.body_length == 1
+
+
+class TestPortInfoProperties:
+    """Tests for PortInfo property methods."""
+
+    def test_link_state_up(self):
+        """Test link_state property for up link."""
+        port = blocks.PortInfo(
+            slot=0, subslot=0x8001, port_id="port-001",
+            mau_type=0, link_state_port=0, link_state_link=1, media_type=0,
+        )
+        assert port.link_state == "Up"
+
+    def test_link_state_down(self):
+        """Test link_state property for down link."""
+        port = blocks.PortInfo(
+            slot=0, subslot=0x8001, port_id="port-001",
+            mau_type=0, link_state_port=0, link_state_link=2, media_type=0,
+        )
+        assert port.link_state == "Down"
+
+    def test_link_state_unknown_value(self):
+        """Test link_state property for unknown value."""
+        port = blocks.PortInfo(
+            slot=0, subslot=0x8001, port_id="port-001",
+            mau_type=0, link_state_port=0, link_state_link=99, media_type=0,
+        )
+        assert "Unknown" in port.link_state
+
+    def test_peer_info_mac_str(self):
+        """Test PeerInfo mac_str property."""
+        peer = blocks.PeerInfo(
+            port_id="port-001",
+            chassis_id="test",
+            mac_address=b"\x00\x11\x22\x33\x44\x55",
+        )
+        assert peer.mac_str == "00:11:22:33:44:55"
+
+
+class TestPDRealDataEdgeCases:
+    """Additional edge case tests for PDRealData parsing."""
+
+    def test_parse_truncated_block(self):
+        """Test parsing data with truncated block gracefully handles errors."""
+        # Build a header that claims more data than available
+        data = struct.pack(">HHBB", 0x0400, 0x0100, 1, 0)  # Claims 258 bytes
+        # Only provide header data
+        result = blocks.parse_pd_real_data(data)
+        # Should not crash, just return what it can
+        assert isinstance(result, blocks.PDRealData)
+
+    def test_parse_non_multiple_block_skipped(self):
+        """Test that non-MultipleBlockHeader blocks are skipped."""
+        # Build a block that is NOT MultipleBlockHeader (e.g., 0x0240)
+        inner = b"\x00" * 10
+        data = struct.pack(">HHBB", 0x0240, len(inner) + 2, 1, 0) + inner
+        result = blocks.parse_pd_real_data(data)
+        # Should have no slots since it's not a MultipleBlockHeader
+        assert len(result.slots) == 0
