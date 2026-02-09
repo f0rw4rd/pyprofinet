@@ -586,7 +586,7 @@ PNRTAHeader = make_packet(
     (
         ("alarm_dst_endpoint", "H"),
         ("alarm_src_endpoint", "H"),
-        ("pdu_type", "B"),  # type:4 + version:4
+        ("pdu_type", "B"),  # bits: type(4) + version(4)
         ("add_flags", "B"),
         ("send_seq_num", "H"),
         ("ack_seq_num", "H"),
