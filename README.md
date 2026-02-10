@@ -86,6 +86,12 @@ This project is a modernized fork of the original PROFINET library by **Alfred K
 - Added type hints, docstrings, proper package structure
 - Improved error handling and logging
 
+## Support
+
+If you find this project useful, consider supporting development:
+
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/f0rw4rd)
+
 ## License
 
 This project maintains the same license as the original work.
