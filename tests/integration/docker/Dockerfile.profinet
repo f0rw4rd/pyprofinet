@@ -24,6 +24,13 @@ RUN git clone --recurse-submodules --depth 1 \
 # Copy custom GSDML header with configurable device identity
 COPY profinet/app_gsdml_pnmock.h /p-net/samples/pn_dev/app_gsdml.h
 
+# Patch p-net to accept IOSAR (AR type 0x0006) connections.
+# profinet-py uses IOSAR for read/write-only access (no cyclic IO).
+# p-net already has device_access handling throughout; only the
+# ar_type gate function needs updating.
+RUN sed -i 's/if (ar_type == PF_ART_IOCAR_SINGLE)/if ((ar_type == PF_ART_IOCAR_SINGLE) || (ar_type == PF_ART_IOSAR))/' \
+    /p-net/src/device/pf_cmdev.c
+
 # Relax compiler warnings - p-net uses -Werror which can break on newer GCC
 RUN find /p-net -type f \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
     -exec sed -i 's/-Werror//g' {} \;

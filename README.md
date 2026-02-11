@@ -89,6 +89,12 @@ profinet -i eth0 read-inm0 device-name
 
 # Read raw record
 profinet -i eth0 read device-name --slot 0 --subslot 1 --index 0xAFF0
+
+# Cyclic IO monitoring (default 32ms cycle)
+profinet -i eth0 cyclic device-name --gsdml device.xml
+
+# Custom cycle time
+profinet -i eth0 cyclic device-name --gsdml device.xml --cycle-ms 16
 ```
 
 ## Credits

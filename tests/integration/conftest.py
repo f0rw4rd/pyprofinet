@@ -38,6 +38,19 @@ EXPECTED_IM3_DESCRIPTOR = "PROFINET Mock Emulation"
 EXPECTED_PROFILE_ID = 0x1234
 EXPECTED_PROFILE_SPEC_TYPE = 0x5678
 
+# ---------------------------------------------------------------------------
+# GSDML I/O module definitions for cyclic IO testing
+# ---------------------------------------------------------------------------
+
+GSDML_MOD_DIGITAL_IN = 0x00000030
+GSDML_SUBMOD_DIGITAL_IN = 0x00000130
+GSDML_MOD_DIGITAL_OUT = 0x00000031
+GSDML_SUBMOD_DIGITAL_OUT = 0x00000131
+GSDML_MOD_DIGITAL_IO = 0x00000032
+GSDML_SUBMOD_DIGITAL_IO = 0x00000132
+GSDML_MOD_ECHO = 0x00000040
+GSDML_SUBMOD_ECHO = 0x00000140
+
 
 # ---------------------------------------------------------------------------
 # Skip conditions

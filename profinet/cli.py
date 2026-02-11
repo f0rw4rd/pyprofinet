@@ -1,11 +1,7 @@
 """
 PROFINET command-line interface.
 
-Provides CLI commands for device discovery and interaction.
-
-Credits:
-    Original implementation by Alfred Krohmer (2015)
-    https://github.com/alfredkrohmer/profinet
+Credits: Original implementation by Alfred Krohmer (2015)
 """
 
 from __future__ import annotations
@@ -13,8 +9,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from collections.abc import Sequence
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import dcp, rpc
 from .dcp import (
@@ -32,7 +29,9 @@ from .exceptions import (
     RPCError,
 )
 from .protocol import PNInM0, PNInM1, PNInM2, PNInM3
-from .util import ethernet_socket, get_mac
+from .rpc import IOCRSetup, IOSlot
+from .rt import IOCR_TYPE_INPUT, IOCR_TYPE_OUTPUT, IOCRConfig, IODataObject
+from .util import ethernet_socket, get_mac, s2mac
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +68,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         print(f"\nFound {len(responses)} device(s):\n")
         for mac, blocks in responses.items():
             desc = dcp.DCPDeviceDescription(mac, blocks)
-            print(f"  {desc.name}")
-            print(f"    MAC:    {desc.mac}")
-            print(f"    IP:     {desc.ip}")
-            print(f"    Vendor: {desc.vendor_name} (0x{desc.vendor_id:04X})")
-            print(f"    Device: 0x{desc.device_id:04X}")
+            print(desc)
             print()
 
         return 0
@@ -341,6 +336,239 @@ def cmd_reset(args: argparse.Namespace) -> int:
         sock.close()
 
 
+def _build_iocr_configs(
+    slots: List[IOSlot],
+    input_frame_id: int,
+    output_frame_id: int,
+    send_clock_factor: int,
+    reduction_ratio: int,
+    watchdog_factor: int = 6,
+) -> Tuple[IOCRConfig, IOCRConfig]:
+    """Build IOCRConfig pair from IOSlots and ConnectResult frame IDs.
+
+    Mirrors the frame_offset calculation in RPCCon._build_iocr_block().
+    """
+
+    def _build_one(iocr_type: int, frame_id: int) -> IOCRConfig:
+        objects: List[IODataObject] = []
+        frame_offset = 0
+
+        # IODataObjects for slots with data in this direction
+        for s in slots:
+            data_len = s.input_length if iocr_type == IOCR_TYPE_INPUT else s.output_length
+            if data_len > 0:
+                objects.append(
+                    IODataObject(
+                        slot=s.slot,
+                        subslot=s.subslot,
+                        frame_offset=frame_offset,
+                        data_length=data_len,
+                        iops_offset=frame_offset + data_len,
+                    )
+                )
+                frame_offset += data_len + 1  # data + IOPS
+
+        # IOCS entries for slots without data in this direction
+        for s in slots:
+            data_len = s.input_length if iocr_type == IOCR_TYPE_INPUT else s.output_length
+            if data_len == 0:
+                frame_offset += 1  # IOCS byte
+
+        data_length = max(40, frame_offset)
+
+        return IOCRConfig(
+            iocr_type=iocr_type,
+            iocr_reference=1 if iocr_type == IOCR_TYPE_INPUT else 2,
+            frame_id=frame_id,
+            send_clock_factor=send_clock_factor,
+            reduction_ratio=reduction_ratio,
+            watchdog_factor=watchdog_factor,
+            data_length=data_length,
+            objects=objects,
+        )
+
+    input_iocr = _build_one(IOCR_TYPE_INPUT, input_frame_id)
+    output_iocr = _build_one(IOCR_TYPE_OUTPUT, output_frame_id)
+    return input_iocr, output_iocr
+
+
+def cmd_cyclic(args: argparse.Namespace) -> int:
+    """Execute cyclic IO command."""
+    from .cyclic import CyclicController
+    from .gsdml import load_gsdml
+
+    sock = ethernet_socket(args.interface, 3)
+    try:
+        src = get_mac(args.interface)
+
+        # Step 1: Resolve device
+        info = rpc.get_station_info(sock, src, args.target)
+        print(f"Connecting to {args.target} ({info.ip})...")
+
+        # Step 2: Acyclic connect to discover slots
+        conn = rpc.RPCCon(info)
+        conn.connect(src)
+
+        print("Discovering slots...", end=" ")
+        device_slots = conn.discover_slots()
+        print(f"{len(device_slots)} entries")
+
+        # Step 3: Load GSDML and match against device slots
+        gsdml_device = load_gsdml(args.gsdml)
+
+        # Parse --submodule overrides: slot:subslot:submodule_id
+        sub_assign: Dict[int, Dict[int, str]] = {}
+        if args.submodule:
+            for spec in args.submodule:
+                parts = spec.split(":", 2)
+                if len(parts) != 3:
+                    print(
+                        f"Error: invalid --submodule format '{spec}', expected slot:subslot:submodule_id"
+                    )
+                    conn.close()
+                    return 1
+                slot_n, subslot_n, sub_id = int(parts[0]), int(parts[1]), parts[2]
+                sub_assign.setdefault(slot_n, {})[subslot_n] = sub_id
+
+        io_slots = gsdml_device.build_io_slots_from_device(device_slots)
+
+        print("Matching against GSDML...")
+        total_in = 0
+        total_out = 0
+        for s in io_slots:
+            if s.input_length > 0 or s.output_length > 0:
+                io_desc = []
+                if s.input_length > 0:
+                    io_desc.append(f"{s.input_length}B in")
+                if s.output_length > 0:
+                    io_desc.append(f"{s.output_length}B out")
+                print(f"  slot={s.slot} sub={s.subslot}: {', '.join(io_desc)}")
+            total_in += s.input_length
+            total_out += s.output_length
+        print(f"Total: {total_in}B input, {total_out}B output")
+
+        # Step 4: Disconnect acyclic, reconnect with IOCR
+        # Close old connection and wait for device to process the Release
+        # before rebinding the RPC port, otherwise the stale Release response
+        # gets consumed as the new Connect response.
+        conn.close()
+        time.sleep(0.5)
+
+        cycle_ms = args.cycle_ms
+        send_clock_factor = 32
+        reduction_ratio = cycle_ms
+
+        setup = IOCRSetup(
+            slots=io_slots,
+            send_clock_factor=send_clock_factor,
+            reduction_ratio=reduction_ratio,
+            watchdog_factor=6,
+            data_hold_factor=6,
+        )
+
+        conn = rpc.RPCCon(info)
+
+        # Drain any stale UDP packets (Release response from previous AR)
+        conn._socket.settimeout(0.1)
+        try:
+            while True:
+                conn._socket.recvfrom(4096)
+        except (TimeoutError, OSError):
+            pass
+        conn._socket.settimeout(conn.timeout)
+
+        result = conn.connect(src, iocr_setup=setup)
+
+        if not result or not result.has_cyclic:
+            print("Error: cyclic IO not established by device")
+            conn.close()
+            return 1
+
+        # Step 5: Parameter phase and ApplicationReady
+        # After CONNECT with IOCR, the PRM phase is implicit (no PrmBegin needed).
+        # PrmBegin is only for re-parameterization of an already-running AR.
+        print(f"\nCyclic IO ({cycle_ms}ms cycle)...")
+
+        conn.prm_end()
+        print("  PrmEnd OK")
+
+        conn.application_ready()
+        print("  ApplicationReady OK")
+        print(
+            f"  Input frame: 0x{result.input_frame_id:04X}, Output frame: 0x{result.output_frame_id:04X}"
+        )
+
+        # Step 6: Build IOCRConfigs and start cyclic controller
+        input_iocr, output_iocr = _build_iocr_configs(
+            io_slots,
+            result.input_frame_id,
+            result.output_frame_id,
+            send_clock_factor,
+            reduction_ratio,
+        )
+
+        # src from get_mac is already bytes; dst_mac from info.mac is string
+        dst_mac = s2mac(info.mac)
+
+        cyclic = CyclicController(
+            interface=args.interface,
+            src_mac=src,
+            dst_mac=dst_mac,
+            input_iocr=input_iocr,
+            output_iocr=output_iocr,
+        )
+
+        # Collect input data for display
+        input_slots = [(s.slot, s.subslot) for s in io_slots if s.input_length > 0]
+        latest_input: Dict[Tuple[int, int], bytes] = {}
+
+        def on_input(slot: int, subslot: int, data: bytes) -> None:
+            latest_input[(slot, subslot)] = data
+
+        cyclic.on_input(on_input)
+        cyclic.start()
+
+        print("\nRunning (Ctrl+C to stop)")
+        start_time = time.monotonic()
+        try:
+            while True:
+                time.sleep(1.0)
+                elapsed = time.monotonic() - start_time
+
+                if args.duration > 0 and elapsed >= args.duration:
+                    break
+
+                # Format input data display
+                io_parts = []
+                for key in input_slots:
+                    data = latest_input.get(key)
+                    if data:
+                        io_parts.append(f"{key[0]}:{key[1]}={data.hex()}")
+                    else:
+                        io_parts.append(f"{key[0]}:{key[1]}=--")
+                data_str = " ".join(io_parts)
+
+                print(
+                    f"[{elapsed:5.1f}s] {data_str} | "
+                    f"TX={cyclic.stats.frames_sent} RX={cyclic.stats.frames_received}"
+                )
+
+        except KeyboardInterrupt:
+            pass
+
+        cyclic.stop()
+        print(
+            f"\nStopped. TX={cyclic.stats.frames_sent} "
+            f"RX={cyclic.stats.frames_received} "
+            f"missed={cyclic.stats.frames_missed}"
+        )
+        conn.close()
+        return 0
+
+    finally:
+        sock.close()
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -383,20 +611,20 @@ def create_parser() -> argparse.ArgumentParser:
 
     # get-param
     sub = subparsers.add_parser("get-param", help="Read device parameter")
-    sub.add_argument("target", help="Target MAC address")
+    sub.add_argument("target", metavar="MAC", help="Device MAC address (e.g. aa:bb:cc:dd:ee:ff)")
     sub.add_argument("param", choices=["name", "ip"], help="Parameter to read")
     sub.set_defaults(func=cmd_get_param)
 
     # set-param
     sub = subparsers.add_parser("set-param", help="Write device parameter")
-    sub.add_argument("target", help="Target MAC address")
+    sub.add_argument("target", metavar="MAC", help="Device MAC address (e.g. aa:bb:cc:dd:ee:ff)")
     sub.add_argument("param", choices=["name", "ip"], help="Parameter to write")
     sub.add_argument("value", help="New value")
     sub.set_defaults(func=cmd_set_param)
 
     # read
     sub = subparsers.add_parser("read", help="Read data record")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.add_argument("--api", type=int, default=0, help="API (default: 0)")
     sub.add_argument("--slot", type=int, required=True, help="Slot number")
     sub.add_argument("--subslot", type=int, required=True, help="Subslot number")
@@ -405,12 +633,12 @@ def create_parser() -> argparse.ArgumentParser:
 
     # read-inm0-filter
     sub = subparsers.add_parser("read-inm0-filter", help="Read device topology")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.set_defaults(func=cmd_read_inm0_filter)
 
     # read-inm0
     sub = subparsers.add_parser("read-inm0", help="Read IM0 identification data")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.add_argument("--api", type=int, default=0, help="API (default: 0)")
     sub.add_argument("--slot", type=int, default=0, help="Slot number (default: 0)")
     sub.add_argument("--subslot", type=int, default=1, help="Subslot number (default: 1)")
@@ -418,7 +646,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     # read-inm1
     sub = subparsers.add_parser("read-inm1", help="Read IM1 tag data")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.add_argument("--api", type=int, default=0, help="API (default: 0)")
     sub.add_argument("--slot", type=int, default=0, help="Slot number (default: 0)")
     sub.add_argument("--subslot", type=int, default=1, help="Subslot number (default: 1)")
@@ -426,7 +654,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     # read-inm2
     sub = subparsers.add_parser("read-inm2", help="Read IM2 date data")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.add_argument("--api", type=int, default=0, help="API (default: 0)")
     sub.add_argument("--slot", type=int, default=0, help="Slot number (default: 0)")
     sub.add_argument("--subslot", type=int, default=1, help="Subslot number (default: 1)")
@@ -434,7 +662,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     # read-inm3
     sub = subparsers.add_parser("read-inm3", help="Read IM3 descriptor data")
-    sub.add_argument("target", help="Target station name")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
     sub.add_argument("--api", type=int, default=0, help="API (default: 0)")
     sub.add_argument("--slot", type=int, default=0, help="Slot number (default: 0)")
     sub.add_argument("--subslot", type=int, default=1, help="Subslot number (default: 1)")
@@ -442,7 +670,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     # set-ip
     sub = subparsers.add_parser("set-ip", help="Set device IP configuration via DCP")
-    sub.add_argument("target", help="Target MAC address")
+    sub.add_argument("target", metavar="MAC", help="Device MAC address (e.g. aa:bb:cc:dd:ee:ff)")
     sub.add_argument("ip", help="IP address")
     sub.add_argument("netmask", help="Subnet mask")
     sub.add_argument("gateway", help="Gateway address")
@@ -451,12 +679,12 @@ def create_parser() -> argparse.ArgumentParser:
 
     # signal
     sub = subparsers.add_parser("signal", help="Flash device LEDs")
-    sub.add_argument("target", help="Target MAC address")
+    sub.add_argument("target", metavar="MAC", help="Device MAC address (e.g. aa:bb:cc:dd:ee:ff)")
     sub.set_defaults(func=cmd_signal)
 
     # reset
     sub = subparsers.add_parser("reset", help="Reset device to factory settings")
-    sub.add_argument("target", help="Target MAC address")
+    sub.add_argument("target", metavar="MAC", help="Device MAC address (e.g. aa:bb:cc:dd:ee:ff)")
     sub.add_argument(
         "--mode",
         choices=["communication", "application", "engineering", "all-data", "device", "factory"],
@@ -464,6 +692,20 @@ def create_parser() -> argparse.ArgumentParser:
         help="Reset mode (default: factory)",
     )
     sub.set_defaults(func=cmd_reset)
+
+    # cyclic
+    sub = subparsers.add_parser("cyclic", help="Monitor cyclic IO using GSDML")
+    sub.add_argument("target", metavar="NAME", help="Station name (e.g. my-device)")
+    sub.add_argument("--gsdml", required=True, help="Path to GSDML XML file")
+    sub.add_argument("--cycle-ms", type=int, default=32, help="Cycle time in ms (default: 32)")
+    sub.add_argument("--duration", type=int, default=0, help="Seconds to run (0 = until Ctrl+C)")
+    sub.add_argument(
+        "--submodule",
+        action="append",
+        metavar="SLOT:SUBSLOT:ID",
+        help="Submodule override as slot:subslot:submodule_id (repeatable)",
+    )
+    sub.set_defaults(func=cmd_cyclic)
 
     return parser
 

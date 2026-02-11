@@ -192,6 +192,14 @@ from .exceptions import (
     SocketError,
     ValidationError,
 )
+from .gsdml import (
+    GSDMLDAP,
+    GSDMLDevice,
+    GSDMLModule,
+    GSDMLSubmodule,
+    load_gsdml,
+    parse_gsdml,
+)
 from .protocol import (
     EthernetHeader,
     EthernetVLANHeader,
@@ -269,7 +277,7 @@ from .vendors import (
     profinet_vendor_map,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __all__ = [
     # Protocol structures
     "EthernetHeader",
@@ -464,6 +472,13 @@ __all__ = [
     "RT_CLASS_1",
     "IOXS_GOOD",
     "IOXS_BAD",
+    # GSDML parser
+    "GSDMLDevice",
+    "GSDMLModule",
+    "GSDMLSubmodule",
+    "GSDMLDAP",
+    "load_gsdml",
+    "parse_gsdml",
     # Device module (high-level API)
     "ProfinetDevice",
     "DeviceInfo",
