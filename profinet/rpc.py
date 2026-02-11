@@ -18,8 +18,9 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from socket import AF_INET, SOCK_DGRAM, socket
-from struct import pack, unpack
 from typing import Any, Dict, List, Optional, Tuple
+
+import construct as cs
 
 from . import blocks, dcp, indices
 from .blocks import (
@@ -82,6 +83,7 @@ from .protocol import (
 @dataclass
 class PortStatistics:
     """Port statistics data (0x8028)."""
+
     ifInOctets: int = 0
     ifOutOctets: int = 0
     ifInDiscards: int = 0
@@ -93,6 +95,7 @@ class PortStatistics:
 @dataclass
 class LinkData:
     """Port link data (0x8029)."""
+
     link_state: str = "unknown"
     link_speed: int = 0
     mau_type: int = 0
@@ -102,6 +105,7 @@ class LinkData:
 @dataclass
 class PortInfo:
     """Port information from PDPortDataReal."""
+
     slot: int = 0
     subslot: int = 0
     port_id: str = ""
@@ -116,6 +120,7 @@ class PortInfo:
 @dataclass
 class InterfaceInfo:
     """Interface information from PDInterfaceDataReal."""
+
     chassis_id: str = ""
     mac: str = ""
     ip: str = ""
@@ -126,6 +131,7 @@ class InterfaceInfo:
 @dataclass
 class DiagnosisEntry:
     """Single diagnosis entry."""
+
     channel: int = 0
     error_type: int = 0
     ext_error_type: int = 0
@@ -135,6 +141,7 @@ class DiagnosisEntry:
 @dataclass
 class ARInfo:
     """Application Relationship info (0xF820)."""
+
     ar_uuid: str = ""
     ar_type: int = 0
     ar_properties: int = 0
@@ -144,6 +151,7 @@ class ARInfo:
 @dataclass
 class LogEntry:
     """Log book entry (0xF830)."""
+
     timestamp: int = 0
     entry_detail: int = 0
 
@@ -165,6 +173,109 @@ MAU_TYPES = {
 }
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Construct Struct Definitions for RPC-level Parsing
+# =============================================================================
+
+# Generic block header (type + length) used to scan response blocks
+ResponseBlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+)
+
+# Slot/Subslot pair used in port info parsing
+SlotSubslotStruct = cs.Struct(
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+)
+
+# Log entry: timestamp + detail
+LogEntryStruct = cs.Struct(
+    "timestamp" / cs.Int32ub,
+    "detail" / cs.Int32ub,
+)
+
+# IOCR API block fields used in _build_iocr_block
+IOCRApiHeaderStruct = cs.Struct(
+    "api" / cs.Int32ub,
+    "num_objects" / cs.Int16ub,
+)
+
+# EPM response body length (little-endian)
+EpmBodyLenStruct = cs.Struct(
+    "body_len" / cs.Int16ul,
+)
+
+# EPM entry count (little-endian)
+EpmCountStruct = cs.Struct(
+    "count" / cs.Int32ul,
+)
+
+# EPM annotation/tower length (little-endian)
+EpmLenStruct = cs.Struct(
+    "length" / cs.Int32ul,
+)
+
+# Single-field Structs (replace standalone parse/build calls)
+UInt16ubStruct = cs.Struct("value" / cs.Int16ub)
+UInt16ulStruct = cs.Struct("value" / cs.Int16ul)
+UInt32ulStruct = cs.Struct("value" / cs.Int32ul)
+
+# UUID bytes in mixed-endian DCE/RPC format
+UUIDStruct = cs.Struct(
+    "time_low" / cs.Int32ul,
+    "time_mid" / cs.Int16ul,
+    "time_hi" / cs.Int16ul,
+    "clock_seq" / cs.Int16ub,
+    "node" / cs.Bytes(6),
+)
+
+# EPM tower floor header (LHS length or RHS length)
+EpmFloorLenStruct = cs.Struct("length" / cs.Int16ul)
+
+# EPM tower floor count
+EpmFloorCountStruct = cs.Struct("count" / cs.Int16ul)
+
+# EPM tower UUID floor: protocol_id + UUID + version_major
+EpmUUIDFloorStruct = cs.Struct(
+    "protocol_id" / cs.Int8ub,
+    "uuid" / cs.Bytes(16),
+    "version_major" / cs.Int16ul,
+)
+
+# EPM tower UDP port (big-endian)
+EpmUDPPortStruct = cs.Struct("port" / cs.Int16ub)
+
+# EPM lookup request body
+EpmLookupBodyStruct = cs.Struct(
+    "inquiry_type" / cs.Int32ul,
+    "object_uuid" / cs.Bytes(16),
+    "iface_uuid" / cs.Bytes(16),
+    "iface_version" / cs.Bytes(4),
+    "vers_option" / cs.Int32ul,
+    "entry_handle" / cs.Int32ul,
+    "max_ents" / cs.Int32ul,
+)
+
+# IM0 filter API header
+InM0FilterApiHeaderStruct = cs.Struct(
+    "api" / cs.Int32ub,
+    "num_modules" / cs.Int16ub,
+)
+
+# IM0 filter module header
+InM0FilterModuleHeaderStruct = cs.Struct(
+    "slot_number" / cs.Int16ub,
+    "module_ident_num" / cs.Int32ub,
+    "num_subslots" / cs.Int16ub,
+)
+
+# IM0 filter subslot entry
+InM0FilterSubslotEntryStruct = cs.Struct(
+    "subslot_number" / cs.Int16ub,
+    "submodule_ident_number" / cs.Int32ub,
+)
 
 # RPC ports (IEC 61158-6-10)
 RPC_PORT = 0x8894  # 34964 - PROFINET IO RPC port
@@ -232,14 +343,11 @@ def _uuid_bytes_to_string(data: bytes) -> str:
     if len(data) != 16:
         return ""
 
-    # Parse fields (little-endian for first 3, big-endian for rest)
-    time_low = int.from_bytes(data[0:4], "little")
-    time_mid = int.from_bytes(data[4:6], "little")
-    time_hi = int.from_bytes(data[6:8], "little")
-    clock_seq = int.from_bytes(data[8:10], "big")
-    node = data[10:16].hex()
-
-    return f"{time_low:08x}-{time_mid:04x}-{time_hi:04x}-{clock_seq:04x}-{node}"
+    parsed = UUIDStruct.parse(data)
+    return (
+        f"{parsed.time_low:08x}-{parsed.time_mid:04x}-{parsed.time_hi:04x}"
+        f"-{parsed.clock_seq:04x}-{parsed.node.hex()}"
+    )
 
 
 def _string_to_uuid_bytes(uuid_str: str) -> bytes:
@@ -248,22 +356,15 @@ def _string_to_uuid_bytes(uuid_str: str) -> bytes:
     if len(parts) != 32:
         raise ValueError(f"Invalid UUID string: {uuid_str}")
 
-    # Parse hex parts
-    time_low = int(parts[0:8], 16)
-    time_mid = int(parts[8:12], 16)
-    time_hi = int(parts[12:16], 16)
-    clock_seq = int(parts[16:20], 16)
-    node = bytes.fromhex(parts[20:32])
-
-    # Pack in mixed-endian format
-    result = bytearray()
-    result.extend(time_low.to_bytes(4, "little"))
-    result.extend(time_mid.to_bytes(2, "little"))
-    result.extend(time_hi.to_bytes(2, "little"))
-    result.extend(clock_seq.to_bytes(2, "big"))
-    result.extend(node)
-
-    return bytes(result)
+    return UUIDStruct.build(
+        {
+            "time_low": int(parts[0:8], 16),
+            "time_mid": int(parts[8:12], 16),
+            "time_hi": int(parts[12:16], 16),
+            "clock_seq": int(parts[16:20], 16),
+            "node": bytes.fromhex(parts[20:32]),
+        }
+    )
 
 
 def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
@@ -289,7 +390,7 @@ def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
 
     try:
         offset = 0
-        floor_count = int.from_bytes(tower_data[offset : offset + 2], "little")
+        floor_count = EpmFloorCountStruct.parse(tower_data[offset : offset + 2]).count
         offset += 2
 
         endpoint = EPMEndpoint()
@@ -299,7 +400,7 @@ def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
                 break
 
             # LHS (left-hand side) - protocol identifier
-            lhs_len = int.from_bytes(tower_data[offset : offset + 2], "little")
+            lhs_len = EpmFloorLenStruct.parse(tower_data[offset : offset + 2]).length
             offset += 2
 
             if offset + lhs_len > len(tower_data):
@@ -312,7 +413,7 @@ def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
             if offset + 2 > len(tower_data):
                 break
 
-            rhs_len = int.from_bytes(tower_data[offset : offset + 2], "little")
+            rhs_len = EpmFloorLenStruct.parse(tower_data[offset : offset + 2]).length
             offset += 2
 
             if offset + rhs_len > len(tower_data):
@@ -327,17 +428,16 @@ def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
 
                 if protocol_id == 0x0D and lhs_len >= 19:
                     # UUID floor (interface or transfer syntax)
-                    uuid_bytes = lhs_data[1:17]
-                    version_major = int.from_bytes(lhs_data[17:19], "little")
+                    uuid_floor = EpmUUIDFloorStruct.parse(lhs_data[:19])
 
                     if floor_idx == 0:
                         # First UUID floor is the interface
-                        endpoint.interface_uuid = _uuid_bytes_to_string(uuid_bytes)
-                        endpoint.interface_version_major = version_major
+                        endpoint.interface_uuid = _uuid_bytes_to_string(uuid_floor.uuid)
+                        endpoint.interface_version_major = uuid_floor.version_major
                         if rhs_len >= 2:
-                            endpoint.interface_version_minor = int.from_bytes(
-                                rhs_data[0:2], "little"
-                            )
+                            endpoint.interface_version_minor = UInt16ulStruct.parse(
+                                rhs_data[0:2]
+                            ).value
 
                 elif protocol_id == 0x0A:
                     # RPC connectionless (ncadg_ip_udp)
@@ -345,7 +445,7 @@ def _parse_epm_tower(tower_data: bytes) -> Optional[EPMEndpoint]:
 
                 elif protocol_id == 0x08 and rhs_len >= 2:
                     # UDP port
-                    endpoint.port = int.from_bytes(rhs_data[0:2], "big")
+                    endpoint.port = EpmUDPPortStruct.parse(rhs_data[0:2]).port
 
                 elif protocol_id == 0x09 and rhs_len >= 4:
                     # IP address
@@ -471,7 +571,9 @@ class IOCRSetup:
         if cycle_ms < 1:
             warnings.append(f"Cycle {cycle_ms:.2f}ms too fast - Python can't do <1ms")
         elif cycle_ms < PYTHON_MIN_CYCLE_TIME_MS:
-            warnings.append(f"Cycle {cycle_ms:.0f}ms may cause jitter (use {PYTHON_MIN_CYCLE_TIME_MS}ms+)")
+            warnings.append(
+                f"Cycle {cycle_ms:.0f}ms may cause jitter (use {PYTHON_MIN_CYCLE_TIME_MS}ms+)"
+            )
 
         if self.watchdog_factor < 3:
             warnings.append(f"Watchdog factor {self.watchdog_factor} too low (use 6+)")
@@ -539,16 +641,33 @@ def epm_lookup(
         PNIO-Device: port 34964
     """
     import os
-    import struct
+
+    # Construct struct for EPM RPC header (little-endian format)
+    _epm_rpc_header = cs.Struct(
+        "version" / cs.Int8ul,
+        "packet_type" / cs.Int8ul,
+        "flags1" / cs.Int8ul,
+        "flags2" / cs.Int8ul,
+        "drep" / cs.Bytes(3),
+        "serial_high" / cs.Int8ul,
+        "object_uuid" / cs.Bytes(16),
+        "interface_uuid" / cs.Bytes(16),
+        "activity_uuid" / cs.Bytes(16),
+        "server_boot_time" / cs.Int32ul,
+        "interface_version" / cs.Int32ul,
+        "sequence_number" / cs.Int32ul,
+        "operation_number" / cs.Int16ul,
+        "interface_hint" / cs.Int16ul,
+        "activity_hint" / cs.Int16ul,
+        "length_of_body" / cs.Int16ul,
+        "fragment_number" / cs.Int16ul,
+        "authentication_protocol" / cs.Int8ul,
+        "serial_low" / cs.Int8ul,
+    )
+
+    _epm_version = cs.Struct("major" / cs.Int16ul, "minor" / cs.Int16ul)
 
     # Build EPM lookup request
-    # RPC header
-    version = 4
-    packet_type = 0x00  # REQUEST
-    flags1 = 0x20  # Idempotent
-    flags2 = 0x00
-    drep = bytes([0x10, 0x00, 0x00])  # Little-endian, ASCII, IEEE float
-
     # Generate random UUIDs for activity and object
     activity_uuid = os.urandom(16)
     object_uuid = bytes(16)  # NULL object UUID
@@ -557,27 +676,28 @@ def epm_lookup(
     interface_uuid = _string_to_uuid_bytes(UUID_EPM_V4)
 
     # Build RPC header (80 bytes)
-    rpc_header = struct.pack(
-        "<BBBB3sB16s16s16sIIIHHHHHBB",
-        version,  # version
-        packet_type,  # packet_type
-        flags1,  # flags1
-        flags2,  # flags2
-        drep,  # drep
-        0,  # serial_high
-        object_uuid,  # object_uuid
-        interface_uuid,  # interface_uuid
-        activity_uuid,  # activity_uuid
-        0,  # server_boot_time
-        3,  # interface_version (major=3, minor=0 for EPM)
-        0,  # sequence_number
-        EPM_LOOKUP,  # operation_number (2 = ept_lookup)
-        0xFFFF,  # interface_hint
-        0xFFFF,  # activity_hint
-        0,  # length_of_body (filled later)
-        0,  # fragment_number
-        0,  # authentication_protocol
-        0,  # serial_low
+    rpc_header = _epm_rpc_header.build(
+        {
+            "version": 4,
+            "packet_type": 0x00,
+            "flags1": 0x20,
+            "flags2": 0x00,
+            "drep": bytes([0x10, 0x00, 0x00]),
+            "serial_high": 0,
+            "object_uuid": object_uuid,
+            "interface_uuid": interface_uuid,
+            "activity_uuid": activity_uuid,
+            "server_boot_time": 0,
+            "interface_version": 3,
+            "sequence_number": 0,
+            "operation_number": EPM_LOOKUP,
+            "interface_hint": 0xFFFF,
+            "activity_hint": 0xFFFF,
+            "length_of_body": 0,
+            "fragment_number": 0,
+            "authentication_protocol": 0,
+            "serial_low": 0,
+        }
     )
 
     # EPM lookup request body
@@ -590,22 +710,26 @@ def epm_lookup(
     # Interface UUID filter (or NULL for all)
     if interface_filter:
         iface_uuid_body = _string_to_uuid_bytes(interface_filter)
-        iface_version = struct.pack("<HH", 1, 0)  # version 1.0
+        iface_version = _epm_version.build({"major": 1, "minor": 0})
     else:
         iface_uuid_body = bytes(16)
-        iface_version = struct.pack("<HH", 0, 0)
+        iface_version = _epm_version.build({"major": 0, "minor": 0})
 
-    # Build body
-    body = struct.pack("<I", inquiry_type)  # inquiry_type
-    body += object_uuid_body  # object UUID
-    body += iface_uuid_body  # interface UUID
-    body += iface_version  # interface version
-    body += struct.pack("<I", 0)  # vers_option
-    body += struct.pack("<I", 0)  # entry_handle (context for continuation)
-    body += struct.pack("<I", 100)  # max_ents (max entries to return)
+    # Build body using declarative Struct
+    body = EpmLookupBodyStruct.build(
+        {
+            "inquiry_type": inquiry_type,
+            "object_uuid": object_uuid_body,
+            "iface_uuid": iface_uuid_body,
+            "iface_version": iface_version,
+            "vers_option": 0,
+            "entry_handle": 0,
+            "max_ents": 100,
+        }
+    )
 
     # Update body length in header
-    rpc_header = rpc_header[:74] + struct.pack("<H", len(body)) + rpc_header[76:]
+    rpc_header = rpc_header[:74] + UInt16ulStruct.build({"value": len(body)}) + rpc_header[76:]
 
     # Send request
     sock = socket(AF_INET, SOCK_DGRAM)
@@ -634,7 +758,7 @@ def epm_lookup(
             logger.debug(f"Unexpected RPC response type: {resp_type}")
             return []
 
-        body_len = struct.unpack("<H", data[74:76])[0]
+        body_len = EpmBodyLenStruct.parse(data[74:76]).body_len
         body_data = data[80 : 80 + body_len]
 
         if len(body_data) < 12:
@@ -644,11 +768,10 @@ def epm_lookup(
         offset = 0
 
         # entry_handle (context for continuation)
-        # entry_handle = struct.unpack("<I", body_data[offset:offset+4])[0]
         offset += 4
 
         # num_ents (number of entries)
-        num_ents = struct.unpack("<I", body_data[offset : offset + 4])[0]
+        num_ents = EpmCountStruct.parse(body_data[offset : offset + 4]).count
         offset += 4
 
         # Skip array metadata (max_count, offset, actual_count)
@@ -674,7 +797,7 @@ def epm_lookup(
             # Annotation length
             if offset + 4 > len(body_data):
                 break
-            annotation_len = struct.unpack("<I", body_data[offset : offset + 4])[0]
+            annotation_len = EpmLenStruct.parse(body_data[offset : offset + 4]).length
             offset += 4
 
             # Extract annotation string (device model/article number)
@@ -690,7 +813,7 @@ def epm_lookup(
             # Tower length
             if offset + 4 > len(body_data):
                 break
-            tower_len = struct.unpack("<I", body_data[offset : offset + 4])[0]
+            tower_len = EpmLenStruct.parse(body_data[offset : offset + 4]).length
             offset += 4
 
             # Tower data
@@ -737,10 +860,23 @@ def get_station_info(
     Raises:
         DCPDeviceNotFoundError: If device not found
     """
+    # Try filtered identify-by-name first
     dcp.send_request(sock, src, PNDCPBlock.NAME_OF_STATION, bytes(name, "utf-8"))
     responses = dcp.read_response(sock, src, timeout_sec=timeout_sec, once=True)
 
     if not responses:
+        # Some devices don't respond to filtered identify requests.
+        # Fall back to broadcast discover and filter by name.
+        logger.debug("Filtered identify failed, falling back to broadcast discover")
+        dcp.send_discover(sock, src)
+        responses = dcp.read_response(sock, src, timeout_sec=timeout_sec)
+
+        # Filter by name
+        for mac, blocks in responses.items():
+            desc = dcp.DCPDeviceDescription(mac, blocks)
+            if desc.name.lower() == name.lower():
+                return desc
+
         raise DCPDeviceNotFoundError(f"Device with name '{name}' not found")
 
     mac, blocks = list(responses.items())[0]
@@ -789,8 +925,7 @@ class RPCCon:
             [0x00, 0x01, 0x76, 0x54, 0x32, 0x10]
         )
         self.remote_object_uuid = PNRPCHeader.OBJECT_UUID_PREFIX + bytes(
-            [0x00, 0x01, info.device_high, info.device_low,
-             info.vendor_high, info.vendor_low]
+            [0x00, 0x01, info.device_high, info.device_low, info.vendor_high, info.vendor_low]
         )
 
         # Connection state
@@ -851,6 +986,32 @@ class RPCCon:
             payload=payload,
         )
 
+    @staticmethod
+    def _pad_block(block_data: bytes) -> bytes:
+        """Pad a serialized block to 4-byte alignment.
+
+        Per IEC 61158-6-10, each block in the NRD payload must be
+        4-byte aligned. The padding bytes are appended to the block
+        body and BlockLength is increased to include them. This keeps
+        padding within the block's scope so subsequent block headers
+        start at a 4-byte boundary.
+
+        Args:
+            block_data: Complete serialized block (type + length + body)
+
+        Returns:
+            Padded block with updated BlockLength
+        """
+        total = len(block_data)
+        pad_len = (4 - total % 4) % 4
+        if pad_len == 0:
+            return block_data
+
+        # Update BlockLength field (bytes 2-3, big-endian) to include padding
+        old_length = int.from_bytes(block_data[2:4], "big")
+        new_length = old_length + pad_len
+        return block_data[:2] + new_length.to_bytes(2, "big") + block_data[4:] + bytes(pad_len)
+
     def _build_alarm_cr_block(
         self,
         transport: int = 0,
@@ -866,7 +1027,7 @@ class RPCCon:
             priority: 0=low priority alarms, 1=high priority alarms
 
         Returns:
-            Serialized AlarmCRBlockReq bytes
+            Serialized AlarmCRBlockReq bytes (padded to 4-byte alignment)
         """
         # AlarmCRProperties: bit 0=priority, bit 1=transport
         properties = (transport << 1) | priority
@@ -894,7 +1055,7 @@ class RPCCon:
             alarm_cr_tag_header_low=PNAlarmCRBlockReq.DEFAULT_TAG_HEADER_LOW,
         )
 
-        return bytes(alarm_cr)
+        return self._pad_block(bytes(alarm_cr))
 
     def _parse_alarm_cr_response(self, response_data: bytes) -> int:
         """Parse AlarmCRBlockRes from connect response.
@@ -908,10 +1069,9 @@ class RPCCon:
         # Scan for block type 0x8103 (AlarmCRBlockRes)
         offset = 0
         while offset + 6 <= len(response_data):
-            block_type = unpack(">H", response_data[offset:offset + 2])[0]
-            block_length = unpack(">H", response_data[offset + 2:offset + 4])[0]
+            hdr = ResponseBlockHeaderStruct.parse(response_data[offset : offset + 4])
 
-            if block_type == PNAlarmCRBlockRes.BLOCK_TYPE:
+            if hdr.block_type == PNAlarmCRBlockRes.BLOCK_TYPE:
                 # Found AlarmCRBlockRes
                 try:
                     alarm_res = PNAlarmCRBlockRes(response_data[offset:])
@@ -920,7 +1080,7 @@ class RPCCon:
                     pass
 
             # Move to next block (block_length + 4 for header)
-            offset += 4 + block_length
+            offset += 4 + hdr.block_length
             # Align to 4 bytes
             offset = (offset + 3) & ~3
 
@@ -947,7 +1107,7 @@ class RPCCon:
             Serialized IOCRBlockReq bytes
         """
         # Calculate frame offset for each slot
-        # Each IO object: data + IOPS byte
+        # Each IO data object: data + IOPS byte
         objects_data = b""
         frame_offset = 0
 
@@ -966,24 +1126,61 @@ class RPCCon:
                 objects_data += bytes(obj)
                 frame_offset += data_len + 1  # data + IOPS
 
+        # Build IOCS objects (consumer status) per IEC 61158-6-10.
+        # Every submodule in ExpectedSubmodule must appear in each IOCR
+        # as EITHER an IODataObject OR an IOCS entry, but NOT both.
+        #
+        # IODataObjects are for submodules that carry data in this IOCR's
+        # direction. IOCS entries are for all OTHER submodules.
+        #
+        # Input IOCR (type=1):
+        #   IODataObject: submodules with input_length > 0
+        #   IOCS: submodules with input_length == 0
+        # Output IOCR (type=2):
+        #   IODataObject: submodules with output_length > 0
+        #   IOCS: submodules with output_length == 0
+        iocs_data = b""
+        iocs_count = 0
+        for slot in setup.slots:
+            # Skip submodules that already have an IODataObject in this IOCR
+            if iocr_type == 1 and slot.input_length > 0:
+                continue
+            if iocr_type == 2 and slot.output_length > 0:
+                continue
+
+            # All other submodules need an IOCS entry
+            iocs_obj = IOCRAPIObject(
+                slot_number=slot.slot,
+                subslot_number=slot.subslot,
+                frame_offset=frame_offset,
+            )
+            iocs_data += bytes(iocs_obj)
+            frame_offset += 1  # IOCS is 1 byte
+            iocs_count += 1
+
         # Pad to minimum 40 bytes
         data_length = max(40, frame_offset)
 
         # IOCR properties: RT_CLASS_1 = 0x01
         iocr_properties = 0x00000001  # RT_CLASS_1
 
-        # Number of objects
-        num_objects = len([s for s in setup.slots if
-                          (iocr_type == 1 and s.input_length > 0) or
-                          (iocr_type == 2 and s.output_length > 0)])
+        # Number of IO data objects
+        num_objects = len(
+            [
+                s
+                for s in setup.slots
+                if (iocr_type == 1 and s.input_length > 0)
+                or (iocr_type == 2 and s.output_length > 0)
+            ]
+        )
 
         # Build IOCRAPI per IEC 61158-6-10:
         # API(4) + nbr_io_data(2) + io_data[] + nbr_iocs(2) + iocs[]
-        api_block = pack(">I", 0)  # API = 0
-        api_block += pack(">H", num_objects)  # Number of IO data objects
+        api_block = IOCRApiHeaderStruct.build({"api": 0, "num_objects": num_objects})
         api_block += objects_data  # Frame descriptors for IO data
-        # Add IOCS objects (consumer status - we don't typically need these)
-        api_block += pack(">H", 0)  # Number of IOCS objects (none)
+        # Add IOCS objects (consumer status for opposite direction)
+        api_block += UInt16ubStruct.build({"value": iocs_count})
+        api_block += iocs_data
 
         # Calculate block length: header(38) + api_block
         header_size = PNIOCRBlockReqHeader.fmt_size
@@ -1004,10 +1201,13 @@ class RPCCon:
             lt=0x8892,  # PROFINET EtherType
             iocr_properties=iocr_properties,
             data_length=data_length,
-            frame_id=0x8000 + iocr_reference,  # Placeholder, device assigns
+            # RT_CLASS_1 frame IDs (controller proposes both):
+            # Input IOCR (device->controller): 0xC000-0xFBFF range
+            # Output IOCR (controller->device): 0x8000-0xBFFF range
+            frame_id=0xC000 + iocr_reference if iocr_type == 1 else 0x8000 + iocr_reference,
             send_clock_factor=setup.send_clock_factor,
             reduction_ratio=setup.reduction_ratio,
-            phase=0,
+            phase=1,  # Phase within reduction cycle (1-based)
             sequence=0,
             frame_send_offset=0xFFFFFFFF,
             watchdog_factor=setup.watchdog_factor,
@@ -1017,7 +1217,7 @@ class RPCCon:
             number_of_apis=1,
         )
 
-        return bytes(iocr_header) + api_block
+        return self._pad_block(bytes(iocr_header) + api_block)
 
     def _build_expected_submodule_block(
         self,
@@ -1036,17 +1236,31 @@ class RPCCon:
         builder = ExpectedSubmoduleBlockReq()
 
         for slot_cfg in setup.slots:
+            # Derive submodule_type from input/output lengths:
+            # 0=NO_IO, 1=INPUT, 2=OUTPUT, 3=INPUT_OUTPUT
+            has_input = slot_cfg.input_length > 0
+            has_output = slot_cfg.output_length > 0
+            if has_input and has_output:
+                submodule_type = 3  # INPUT_OUTPUT
+            elif has_input:
+                submodule_type = 1  # INPUT
+            elif has_output:
+                submodule_type = 2  # OUTPUT
+            else:
+                submodule_type = 0  # NO_IO
+
             builder.add_submodule(
                 api=0,
                 slot=slot_cfg.slot,
                 subslot=slot_cfg.subslot,
                 module_ident=slot_cfg.module_ident,
                 submodule_ident=slot_cfg.submodule_ident,
+                submodule_type=submodule_type,
                 input_length=slot_cfg.input_length,
                 output_length=slot_cfg.output_length,
             )
 
-        return builder.to_bytes()
+        return self._pad_block(builder.to_bytes())
 
     def _parse_iocr_response(
         self,
@@ -1065,21 +1279,25 @@ class RPCCon:
         # Scan for block type 0x8102 (IOCRBlockRes)
         offset = 0
         while offset + 6 <= len(response_data):
-            block_type = unpack(">H", response_data[offset:offset + 2])[0]
-            block_length = unpack(">H", response_data[offset + 2:offset + 4])[0]
+            hdr = ResponseBlockHeaderStruct.parse(response_data[offset : offset + 4])
 
-            if block_type == PNIOCRBlockRes.BLOCK_TYPE:
+            if hdr.block_type == PNIOCRBlockRes.BLOCK_TYPE:
                 try:
                     iocr_res = PNIOCRBlockRes(response_data[offset:])
+                    logger.debug(
+                        f"Found IOCRBlockRes: type={iocr_res.iocr_type} "
+                        f"ref={iocr_res.iocr_reference} frame_id=0x{iocr_res.frame_id:04X}"
+                    )
                     if iocr_res.iocr_type == iocr_type:
                         return iocr_res.frame_id
-                except (ValueError, IndexError):
-                    pass
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Failed to parse IOCRBlockRes at offset {offset}: {e}")
 
             # Move to next block
-            offset += 4 + block_length
+            offset += 4 + hdr.block_length
             offset = (offset + 3) & ~3  # Align to 4 bytes
 
+        logger.debug(f"No IOCRBlockRes found for iocr_type={iocr_type}")
         return 0
 
     def _send_receive(self, rpc: PNRPCHeader) -> PNRPCHeader:
@@ -1096,21 +1314,29 @@ class RPCCon:
             RPCFaultError: If device returned fault
             RPCError: If unexpected response type
         """
-        self._socket.sendto(bytes(rpc), self.peer)
+        rpc_bytes = bytes(rpc)
+        logger.debug(f"RPC request ({len(rpc_bytes)} bytes): {rpc_bytes.hex(' ')}")
+        self._socket.sendto(rpc_bytes, self.peer)
 
         try:
             data = self._socket.recvfrom(4096)[0]
         except TimeoutError:
-            raise RPCTimeoutError(
-                f"No response from {self.info.name} ({self.info.ip})"
-            ) from None
+            raise RPCTimeoutError(f"No response from {self.info.name} ({self.info.ip})") from None
         except OSError as e:
             raise RPCError(f"Socket error: {e}") from e
+
+        logger.debug(f"RPC response raw ({len(data)} bytes): {data[:100].hex(' ')}...")
 
         try:
             rpc_resp = PNRPCHeader(data)
         except ValueError as e:
             raise RPCError(f"Failed to parse RPC response: {e}") from e
+
+        logger.debug(
+            f"RPC response parsed: type=0x{rpc_resp.packet_type:02X} "
+            f"op={rpc_resp.operation_number} body_len={rpc_resp.length_of_body} "
+            f"payload_len={len(rpc_resp.payload)}"
+        )
 
         # Validate response type
         if rpc_resp.packet_type == PNRPCHeader.FAULT:
@@ -1121,9 +1347,7 @@ class RPCCon:
         elif rpc_resp.packet_type == PNRPCHeader.REJECT:
             raise RPCError(f"RPC request rejected by {self.info.name}")
         elif rpc_resp.packet_type != PNRPCHeader.RESPONSE:
-            raise RPCError(
-                f"Unexpected RPC packet type: 0x{rpc_resp.packet_type:02X}"
-            )
+            raise RPCError(f"Unexpected RPC packet type: 0x{rpc_resp.packet_type:02X}")
 
         self.live = datetime.now()
         return rpc_resp
@@ -1181,6 +1405,24 @@ class RPCCon:
             )
 
         # Create AR block request
+        # AR Properties per IEC 61158-6-10 (from Wireshark dissector):
+        # Bits 0-2: State (1=Active)
+        # Bit 3: SupervisorTakeoverAllowed
+        # Bit 4: ParametrizationServer (0=External PrmServer, 1=CM Initiator)
+        # Bit 8: DeviceAccess (0=SubmodFromExpSubmod, 1=DeviceControl)
+        # Bits 9-10: CompanionAR (0=Single)
+        # Bit 11: AcknowledgeCompanionAR
+        # Bit 30: StartupMode (0=Legacy, 1=Advanced)
+        # Bit 31: PullModuleAlarmAllowed
+        if iocr_setup:
+            # IO AR (IOCARSingle) with cyclic data:
+            # State=Active(1), PrmServer=CM_Initiator(bit4), DeviceAccess=0
+            ar_properties = 0x00000011
+        else:
+            # Device access AR (no cyclic, just read/write):
+            # State=Active(1), PrmServer=CM_Initiator(bit4), DeviceAccess=1(bit8)
+            ar_properties = 0x00000111
+
         block = PNBlockHeader(
             0x0101,  # ARBlockReq
             PNARBlockRequest.fmt_size - 2,
@@ -1188,14 +1430,18 @@ class RPCCon:
             0x00,
         )
 
+        # AR Type: 0x0001 = IOCARSingle (IO Controller AR, for cyclic IO)
+        #          0x0006 = IOSAR (IO Supervisor AR / DeviceAccess, for read/write only)
+        ar_type = 0x0001 if iocr_setup else 0x0006
+
         ar = PNARBlockRequest(
             bytes(block),
-            0x0006,  # AR Type (IOCARSingle)
+            ar_type,
             self.ar_uuid,
             0x1234,  # Session key
             self.src_mac,
             self.local_object_uuid,
-            0x0131,  # AR Properties (bits 0,4,5,8 set: supervisor-takeover, pull/plug allowed)
+            ar_properties,
             100,  # Timeout factor
             0x8892,  # UDP RT port
             2,  # Station name length
@@ -1203,8 +1449,12 @@ class RPCCon:
             payload=b"",
         )
 
-        # Build NRD payload with AR block
-        nrd_payload = bytes(ar)
+        # Build NRD payload with AR block.
+        # Each block is padded to 4-byte alignment via _pad_block(), which
+        # appends padding bytes and includes them in BlockLength. This
+        # ensures all blocks start at 4-byte boundaries, which some device
+        # firmware (e.g. E-T-A, Siemens) requires for correct parsing.
+        nrd_payload = self._pad_block(bytes(ar))
 
         # Add IOCR blocks if cyclic IO requested
         if iocr_setup:
@@ -1228,25 +1478,85 @@ class RPCCon:
             )
             nrd_payload += output_iocr
 
+            # AlarmCRBlockReq is MANDATORY for IOCARSingle (ar_type=0x0001)
+            # Per IEC 61158-6-10, exactly 1 AlarmCR must be present.
+            # Block order: AR -> IOCRs -> AlarmCR -> ExpectedSubmodule
+            alarm_cr_data = self._build_alarm_cr_block()
+            nrd_payload += alarm_cr_data
+            with_alarm_cr = True  # Mark as enabled for response parsing
+
             # ExpectedSubmoduleBlockReq tells device what modules we expect
             expected_submodule = self._build_expected_submodule_block(iocr_setup)
             nrd_payload += expected_submodule
 
-        # Add AlarmCR block if requested
-        if with_alarm_cr:
+        elif with_alarm_cr:
+            # AlarmCR without IOCR (DeviceAccess AR with alarm support)
             alarm_cr_data = self._build_alarm_cr_block()
             nrd_payload += alarm_cr_data
+
+        # Debug: dump the NRD payload blocks before sending
+        if iocr_setup:
+            logger.debug(f"Connect NRD payload ({len(nrd_payload)} bytes):")
+            _off = 0
+            while _off + 4 <= len(nrd_payload):
+                _bt = int.from_bytes(nrd_payload[_off : _off + 2], "big")
+                _bl = int.from_bytes(nrd_payload[_off + 2 : _off + 4], "big")
+                _block_data = nrd_payload[_off : _off + 4 + _bl]
+                logger.debug(
+                    f"  Block at {_off}: type=0x{_bt:04X} length={_bl} raw={_block_data.hex(' ')}"
+                )
+                _off += 4 + _bl
+                _off = (_off + 3) & ~3
 
         nrd = self._create_nrd(nrd_payload)
         rpc = self._create_rpc(PNRPCHeader.CONNECT, bytes(nrd))
 
         try:
             rpc_resp = self._send_receive(rpc)
+            logger.debug(
+                f"Connect RPC payload ({len(rpc_resp.payload)} bytes): "
+                f"{rpc_resp.payload[:200].hex(' ')}"
+            )
             nrd_resp = PNNRDData(rpc_resp.payload)
+            logger.debug(
+                f"NRD: args_max_status=0x{nrd_resp.args_maximum_status:08X} "
+                f"args_length={nrd_resp.args_length} "
+                f"max_count={nrd_resp.maximum_count} "
+                f"offset={nrd_resp.offset} "
+                f"actual_count={nrd_resp.actual_count} "
+                f"payload_len={len(nrd_resp.payload)}"
+            )
+
+            # Check for PNIO errors in the NRD status
+            # The args_maximum_status field is non-zero on error
+            if nrd_resp.args_maximum_status != 0:
+                try:
+                    pnio_err = PNIOError.from_args_status(nrd_resp.args_maximum_status)
+                    raise RPCConnectionError(
+                        f"Connect rejected by device: {pnio_err}"
+                    ) from pnio_err
+                except PNIOError as pe:
+                    raise RPCConnectionError(f"Connect rejected by device: {pe}") from pe
 
             # Parse IOCR responses if cyclic IO enabled
             result = None
             if iocr_setup:
+                # Debug: dump response blocks
+                logger.debug(
+                    f"Connect response NRD payload ({len(nrd_resp.payload)} bytes): "
+                    f"{nrd_resp.payload[:200].hex(' ')}"
+                )
+                # Scan and log all block types in response
+                _off = 0
+                while _off + 4 <= len(nrd_resp.payload):
+                    _hdr = ResponseBlockHeaderStruct.parse(nrd_resp.payload[_off : _off + 4])
+                    logger.debug(
+                        f"  Response block at offset {_off}: "
+                        f"type=0x{_hdr.block_type:04X} length={_hdr.block_length}"
+                    )
+                    _off += 4 + _hdr.block_length
+                    _off = (_off + 3) & ~3  # Align to 4 bytes
+
                 result = ConnectResult(
                     ar_uuid=self.ar_uuid,
                     session_key=0x1234,
@@ -1507,8 +1817,10 @@ class RPCCon:
         # Parse individual results
         results = parse_write_multiple_response(nrd_resp.payload)
 
-        logger.debug(f"WriteMultiple: {len(results)} writes, "
-                    f"{sum(1 for r in results if r.success)} succeeded")
+        logger.debug(
+            f"WriteMultiple: {len(results)} writes, "
+            f"{sum(1 for r in results if r.success)} succeeded"
+        )
 
         return results
 
@@ -1556,24 +1868,31 @@ class RPCCon:
         result: Dict[int, Dict[int, Tuple[int, Dict[int, int]]]] = {}
 
         # Parse API count
-        num_api = unpack(">H", data[:2])[0]
+        num_api = UInt16ubStruct.parse(data[:2]).value
         data = data[2:]
 
         for _ in range(num_api):
-            # Parse API header
-            api, num_modules = unpack(">IH", data[:6])
+            # Parse API header (module-level Struct)
+            _ah = InM0FilterApiHeaderStruct.parse(data[:6])
+            api = _ah.api
+            num_modules = _ah.num_modules
             data = data[6:]
             result[api] = {}
 
             for _ in range(num_modules):
-                # Parse module header
-                slot_number, module_ident_num, num_subslots = unpack(">HIH", data[:8])
+                # Parse module header (module-level Struct)
+                _mh = InM0FilterModuleHeaderStruct.parse(data[:8])
+                slot_number = _mh.slot_number
+                module_ident_num = _mh.module_ident_num
+                num_subslots = _mh.num_subslots
                 data = data[8:]
 
                 subslots: Dict[int, int] = {}
                 for _ in range(num_subslots):
-                    # Parse subslot entry
-                    subslot_number, submodule_ident_number = unpack(">HI", data[:6])
+                    # Parse subslot entry (module-level Struct)
+                    _se = InM0FilterSubslotEntryStruct.parse(data[:6])
+                    subslot_number = _se.subslot_number
+                    submodule_ident_number = _se.submodule_ident_number
                     data = data[6:]
                     subslots[subslot_number] = submodule_ident_number
 
@@ -1887,10 +2206,10 @@ class RPCCon:
         data = iod.payload
         link = LinkData()
 
-        if len(data) >= 12:
-            # Skip block header (6 bytes)
-            # Parse link state and MAU type
-            link.mau_type = unpack(">H", data[8:10])[0] if len(data) >= 10 else 0
+        if len(data) >= 10:
+            # Skip block header (6 bytes) + padding (2 bytes)
+            # Parse MAU type
+            link.mau_type = UInt16ubStruct.parse(data[8:10]).value
             link.mau_type_name = MAU_TYPES.get(link.mau_type, f"Unknown ({link.mau_type})")
 
         return link
@@ -1912,7 +2231,9 @@ class RPCCon:
                 chassis_len = data[offset]
                 offset += 1
                 if offset + chassis_len <= len(data):
-                    info.chassis_id = data[offset:offset + chassis_len].decode("utf-8", errors="replace")
+                    info.chassis_id = data[offset : offset + chassis_len].decode(
+                        "utf-8", errors="replace"
+                    )
                     offset += chassis_len
                     # Align to 2 bytes
                     if (1 + chassis_len) % 2:
@@ -1920,15 +2241,15 @@ class RPCCon:
 
                     # MAC address (6 bytes)
                     if offset + 6 <= len(data):
-                        mac = data[offset:offset + 6]
+                        mac = data[offset : offset + 6]
                         info.mac = ":".join(f"{b:02x}" for b in mac)
                         offset += 6 + 2  # MAC + padding
 
                     # IP, netmask, gateway (4 bytes each)
                     if offset + 12 <= len(data):
-                        info.ip = ".".join(str(b) for b in data[offset:offset + 4])
-                        info.netmask = ".".join(str(b) for b in data[offset + 4:offset + 8])
-                        info.gateway = ".".join(str(b) for b in data[offset + 8:offset + 12])
+                        info.ip = ".".join(str(b) for b in data[offset : offset + 4])
+                        info.netmask = ".".join(str(b) for b in data[offset + 4 : offset + 8])
+                        info.gateway = ".".join(str(b) for b in data[offset + 8 : offset + 12])
 
         return info
 
@@ -1955,8 +2276,9 @@ class RPCCon:
             offset = 8
             # Slot/subslot
             if offset + 4 <= len(data):
-                info.slot = unpack(">H", data[offset:offset + 2])[0]
-                info.subslot = unpack(">H", data[offset + 2:offset + 4])[0]
+                _ss = SlotSubslotStruct.parse(data[offset : offset + 4])
+                info.slot = _ss.slot
+                info.subslot = _ss.subslot
                 offset += 4
 
             # Port ID length + string
@@ -1964,7 +2286,9 @@ class RPCCon:
                 port_id_len = data[offset]
                 offset += 1
                 if offset + port_id_len <= len(data):
-                    info.port_id = data[offset:offset + port_id_len].decode("utf-8", errors="replace")
+                    info.port_id = data[offset : offset + port_id_len].decode(
+                        "utf-8", errors="replace"
+                    )
 
         return info
 
@@ -1984,13 +2308,12 @@ class RPCCon:
             """Parse a single block, return (type, len, content) or None."""
             if offset + 4 > len(block_data):
                 return None
-            block_type = unpack(">H", block_data[offset:offset + 2])[0]
-            block_len = unpack(">H", block_data[offset + 2:offset + 4])[0]
-            if block_type == 0 and block_len == 0:
+            hdr = ResponseBlockHeaderStruct.parse(block_data[offset : offset + 4])
+            if hdr.block_type == 0 and hdr.block_length == 0:
                 return None
             # Content after header (4) + version (2) = 6 bytes
-            content = block_data[offset + 6:offset + 4 + block_len]
-            return block_type, block_len, content
+            content = block_data[offset + 6 : offset + 4 + hdr.block_length]
+            return hdr.block_type, hdr.block_length, content
 
         def scan_for_blocks(block_data: bytes) -> None:
             """Scan data for known block types."""
@@ -2001,20 +2324,25 @@ class RPCCon:
                 if i + 4 > len(block_data):
                     break
 
-                block_type = unpack(">H", block_data[i:i + 2])[0]
-                block_len = unpack(">H", block_data[i + 2:i + 4])[0]
+                hdr = ResponseBlockHeaderStruct.parse(block_data[i : i + 4])
 
                 # Sanity checks
-                if block_len == 0 or block_len > 500 or i + 4 + block_len > len(block_data):
+                if (
+                    hdr.block_length == 0
+                    or hdr.block_length > 500
+                    or i + 4 + hdr.block_length > len(block_data)
+                ):
                     continue
 
-                content = block_data[i + 6:i + 4 + block_len]
+                content = block_data[i + 6 : i + 4 + hdr.block_length]
 
-                if block_type == 0x0240:  # PDInterfaceDataReal
+                if hdr.block_type == 0x0240:  # PDInterfaceDataReal
                     if len(content) > 3:
                         chassis_len = content[0]
                         if chassis_len > 0 and chassis_len < 50:
-                            interface.chassis_id = content[1:1 + chassis_len].decode("utf-8", errors="replace")
+                            interface.chassis_id = content[1 : 1 + chassis_len].decode(
+                                "utf-8", errors="replace"
+                            )
 
                             mac_offset = 1 + chassis_len
                             if mac_offset % 2:
@@ -2022,26 +2350,37 @@ class RPCCon:
                             # Skip padding (2 bytes after name)
                             mac_offset += 2
                             if mac_offset + 6 <= len(content):
-                                mac = content[mac_offset:mac_offset + 6]
+                                mac = content[mac_offset : mac_offset + 6]
                                 interface.mac = ":".join(f"{b:02x}" for b in mac)
 
                             ip_offset = mac_offset + 6 + 2  # MAC + padding
                             if ip_offset + 12 <= len(content):
-                                interface.ip = ".".join(str(b) for b in content[ip_offset:ip_offset + 4])
-                                interface.netmask = ".".join(str(b) for b in content[ip_offset + 4:ip_offset + 8])
-                                interface.gateway = ".".join(str(b) for b in content[ip_offset + 8:ip_offset + 12])
+                                interface.ip = ".".join(
+                                    str(b) for b in content[ip_offset : ip_offset + 4]
+                                )
+                                interface.netmask = ".".join(
+                                    str(b) for b in content[ip_offset + 4 : ip_offset + 8]
+                                )
+                                interface.gateway = ".".join(
+                                    str(b) for b in content[ip_offset + 8 : ip_offset + 12]
+                                )
 
-                elif block_type == 0x020F:  # PDPortDataReal
+                elif hdr.block_type == 0x020F:  # PDPortDataReal
                     port = PortInfo()
                     if len(content) >= 10:
                         # Skip padding (2), then slot/subslot
-                        port.slot = unpack(">H", content[2:4])[0]
-                        port.subslot = unpack(">H", content[4:6])[0]
+                        _ss = SlotSubslotStruct.parse(content[2:6])
+                        port.slot = _ss.slot
+                        port.subslot = _ss.subslot
                         port_id_len = content[6]
                         if 7 + port_id_len <= len(content) and port_id_len > 0:
-                            port.port_id = content[7:7 + port_id_len].decode("utf-8", errors="replace")
+                            port.port_id = content[7 : 7 + port_id_len].decode(
+                                "utf-8", errors="replace"
+                            )
                             # Check if this port was already added
-                            if not any(p.slot == port.slot and p.subslot == port.subslot for p in ports):
+                            if not any(
+                                p.slot == port.slot and p.subslot == port.subslot for p in ports
+                            ):
                                 ports.append(port)
 
         scan_for_blocks(data)
@@ -2105,12 +2444,12 @@ class RPCCon:
             Dictionary mapping index to DiagnosisData
         """
         DIAGNOSIS_INDICES = [
-            (0x800A, 0, 0, 0),      # Channel diagnosis for slot 0
-            (0x800B, 0, 0, 0),      # All diagnosis for slot 0
-            (0x800C, 0, 0, 1),      # Channel diagnosis for subslot 1
-            (0xF000, 0, 0, 0),      # All diagnosis data (device level)
-            (0xF00A, 0, 0, 0),      # Channel diagnosis (API level)
-            (0xF00B, 0, 0, 0),      # All diagnosis (API level)
+            (0x800A, 0, 0, 0),  # Channel diagnosis for slot 0
+            (0x800B, 0, 0, 0),  # All diagnosis for slot 0
+            (0x800C, 0, 0, 1),  # Channel diagnosis for subslot 1
+            (0xF000, 0, 0, 0),  # All diagnosis data (device level)
+            (0xF00A, 0, 0, 0),  # Channel diagnosis (API level)
+            (0xF00B, 0, 0, 0),  # All diagnosis (API level)
         ]
 
         results: Dict[int, DiagnosisData] = {}
@@ -2142,10 +2481,9 @@ class RPCCon:
                 # Parse log entries (structure: timestamp + detail)
                 entry_count = 0
                 while offset + 8 <= len(data) and entry_count < 50:
-                    timestamp = unpack(">I", data[offset:offset + 4])[0]
-                    detail = unpack(">I", data[offset + 4:offset + 8])[0]
-                    if timestamp > 0 or detail > 0:
-                        entries.append(LogEntry(timestamp=timestamp, entry_detail=detail))
+                    _le = LogEntryStruct.parse(data[offset : offset + 8])
+                    if _le.timestamp > 0 or _le.detail > 0:
+                        entries.append(LogEntry(timestamp=_le.timestamp, entry_detail=_le.detail))
                     offset += 8
                     entry_count += 1
         except RPCError:
@@ -2168,12 +2506,12 @@ class RPCCon:
                 # Skip block header (6 bytes)
                 offset = 6
                 # AR UUID (16 bytes)
-                ar_uuid = data[offset + 2:offset + 18]
+                ar_uuid = data[offset + 2 : offset + 18]
                 ar.ar_uuid = ":".join(f"{b:02x}" for b in ar_uuid)
                 offset += 18
                 # AR type
                 if offset + 2 <= len(data):
-                    ar.ar_type = unpack(">H", data[offset:offset + 2])[0]
+                    ar.ar_type = UInt16ubStruct.parse(data[offset : offset + 2]).value
                 return ar
         except RPCError:
             pass
@@ -2192,18 +2530,48 @@ class RPCCon:
         """
         SCAN_INDICES = [
             # I&M
-            0xAFF0, 0xAFF1, 0xAFF2, 0xAFF3, 0xAFF4, 0xAFF5,
+            0xAFF0,
+            0xAFF1,
+            0xAFF2,
+            0xAFF3,
+            0xAFF4,
+            0xAFF5,
             # Port/Interface
-            0x8020, 0x8028, 0x8029, 0x802A, 0x802B, 0x802F,
-            0x8050, 0x8051, 0x8080, 0x8090,
+            0x8020,
+            0x8028,
+            0x8029,
+            0x802A,
+            0x802B,
+            0x802F,
+            0x8050,
+            0x8051,
+            0x8080,
+            0x8090,
             # Diagnosis
-            0x800A, 0x800B, 0x800C, 0x8010, 0x8011, 0x8012,
+            0x800A,
+            0x800B,
+            0x800C,
+            0x8010,
+            0x8011,
+            0x8012,
             # Device level
-            0xF000, 0xF00A, 0xF00B, 0xF80C,
+            0xF000,
+            0xF00A,
+            0xF00B,
+            0xF80C,
             # Real data
-            0xF820, 0xF821, 0xF830, 0xF840, 0xF841, 0xF842, 0xF880,
+            0xF820,
+            0xF821,
+            0xF830,
+            0xF840,
+            0xF841,
+            0xF842,
+            0xF880,
             # Manufacturer (sample range)
-            0xE000, 0xE001, 0xE002, 0xE010,
+            0xE000,
+            0xE001,
+            0xE002,
+            0xE010,
         ]
 
         found: Dict[int, int] = {}
@@ -2274,13 +2642,15 @@ class RPCCon:
                 probe_list.extend(idx_module.INTERFACE_INDICES)
             if include_standard:
                 probe_list.extend(idx_module.DEVICE_INDICES)
-                probe_list.extend([
-                    (idx_module.EXPECTED_ID_SUBSLOT, "ExpectedIdentificationData"),
-                    (idx_module.REAL_ID_SUBSLOT, "RealIdentificationData"),
-                    (idx_module.MODULE_DIFF_BLOCK, "ModuleDiffBlock"),
-                    (idx_module.RECORD_INPUT_DATA, "RecordInputData"),
-                    (idx_module.RECORD_OUTPUT_DATA, "RecordOutputData"),
-                ])
+                probe_list.extend(
+                    [
+                        (idx_module.EXPECTED_ID_SUBSLOT, "ExpectedIdentificationData"),
+                        (idx_module.REAL_ID_SUBSLOT, "RealIdentificationData"),
+                        (idx_module.MODULE_DIFF_BLOCK, "ModuleDiffBlock"),
+                        (idx_module.RECORD_INPUT_DATA, "RecordInputData"),
+                        (idx_module.RECORD_OUTPUT_DATA, "RecordOutputData"),
+                    ]
+                )
 
         # Remove duplicates while preserving order
         seen = set()
@@ -2559,9 +2929,7 @@ class RPCCon:
         """
         from .indices import BLOCK_IOD_CONTROL_APP_READY_REQ, CONTROL_CMD_APPLICATION_READY
 
-        return self._send_control(
-            BLOCK_IOD_CONTROL_APP_READY_REQ, CONTROL_CMD_APPLICATION_READY
-        )
+        return self._send_control(BLOCK_IOD_CONTROL_APP_READY_REQ, CONTROL_CMD_APPLICATION_READY)
 
     def ready_for_rt_class_3(self) -> bytes:
         """Send ReadyForRT_CLASS_3 control command.

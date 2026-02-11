@@ -8,7 +8,8 @@ For root-free operation, use direct RPC connection (see below).
 
 import os
 import sys
-from profinet import ProfinetDevice, PermissionDeniedError
+
+from profinet import PermissionDeniedError, ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
 DEVICE_IP = os.environ.get("PROFINET_IP", "192.168.1.100")

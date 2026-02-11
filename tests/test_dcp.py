@@ -1,22 +1,16 @@
 """Tests for profinet.dcp module."""
 
 import pytest
+
 from profinet.dcp import (
-    DCPDeviceDescription,
-    PARAMS,
-    decode_device_role,
-    get_block_name,
-    DEVICE_ROLE_IO_DEVICE,
     DEVICE_ROLE_IO_CONTROLLER,
+    DEVICE_ROLE_IO_DEVICE,
     DEVICE_ROLE_IO_MULTIDEVICE,
     DEVICE_ROLE_PN_SUPERVISOR,
-    DCP_OPTION_IP,
-    DCP_OPTION_DEVICE,
-    DCP_SUBOPTION_DEVICE_TYPE,
-    DCP_SUBOPTION_DEVICE_ROLE,
-    DCP_SUBOPTION_DEVICE_INSTANCE,
-    DCP_SUBOPTION_DEVICE_OPTIONS,
-    DCP_SUBOPTION_DEVICE_ALIAS,
+    PARAMS,
+    DCPDeviceDescription,
+    decode_device_role,
+    get_block_name,
 )
 from profinet.protocol import PNDCPBlock
 
@@ -40,7 +34,7 @@ class TestDCPDeviceDescription:
         assert device.ip == "192.168.1.1"
         assert device.netmask == "255.255.255.0"
         assert device.gateway == "192.168.1.254"
-        assert device.vendor_id == 0x002a
+        assert device.vendor_id == 0x002A
         assert device.device_id == 0x0001
 
     def test_missing_name(self):
@@ -88,7 +82,7 @@ class TestDCPDeviceDescription:
 
         device = DCPDeviceDescription(mac, blocks)
 
-        assert device.vendor_id == 0x02b8
+        assert device.vendor_id == 0x02B8
         assert device.device_id == 0x0042
 
     def test_repr(self):
@@ -277,8 +271,8 @@ class TestDCPDeviceDescription:
         assert device.name == "plcxb1d0ed"
         assert device.device_type == "S7-1200"
         assert device.ip == "192.168.0.215"
-        assert device.vendor_id == 0x002a
-        assert device.device_id == 0x010d
+        assert device.vendor_id == 0x002A
+        assert device.device_id == 0x010D
         assert "IO-Controller" in device.device_roles
         assert device.device_instance == (0, 100)
 
@@ -403,22 +397,21 @@ class TestPARAMS:
         assert PARAMS["ip"] == PNDCPBlock.IP_ADDRESS
 
 
-from unittest.mock import MagicMock, patch
-from struct import pack
+from unittest.mock import MagicMock
 
 from profinet.dcp import (
+    DCP_MULTICAST_MAC,
+    RESET_MODE_APPLICATION,
+    RESET_MODE_COMMUNICATION,
+    RESET_MODE_FACTORY,
+    _generate_xid,
+    get_param,
+    read_response,
+    reset_to_factory,
     send_discover,
     send_request,
-    read_response,
-    get_param,
     set_param,
     signal_device,
-    reset_to_factory,
-    RESET_MODE_COMMUNICATION,
-    RESET_MODE_APPLICATION,
-    RESET_MODE_FACTORY,
-    DCP_MULTICAST_MAC,
-    _generate_xid,
 )
 from profinet.exceptions import DCPError
 
@@ -477,13 +470,11 @@ class TestReadResponse:
     def test_read_response_empty_on_no_data(self):
         """Test read_response returns empty dict when no data."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = read_response(mock_sock, b"\x00\x11\x22\x33\x44\x55", timeout_sec=1)
 
         assert result == {}
-
 
 
 class TestGetParam:
@@ -499,15 +490,10 @@ class TestGetParam:
     def test_get_param_sends_request(self):
         """Test get_param sends request and reads response."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = get_param(
-            mock_sock,
-            b"\x00\x11\x22\x33\x44\x55",
-            "AA:BB:CC:DD:EE:FF",
-            "name",
-            timeout_sec=1
+            mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", "name", timeout_sec=1
         )
 
         mock_sock.send.assert_called_once()
@@ -522,13 +508,14 @@ class TestSetParam:
         mock_sock = MagicMock()
 
         with pytest.raises(DCPError, match="Unknown parameter"):
-            set_param(mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", "invalid", "value")
+            set_param(
+                mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", "invalid", "value"
+            )
 
     def test_set_param_sends_request(self):
         """Test set_param sends request."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = set_param(
             mock_sock,
@@ -536,7 +523,7 @@ class TestSetParam:
             "AA:BB:CC:DD:EE:FF",
             "name",
             "new-name",
-            timeout_sec=1
+            timeout_sec=1,
         )
 
         mock_sock.send.assert_called_once()
@@ -549,15 +536,14 @@ class TestSignalDevice:
     def test_signal_device_sends_request(self):
         """Test signal_device sends Control/Signal request."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = signal_device(
             mock_sock,
             b"\x00\x11\x22\x33\x44\x55",
             "AA:BB:CC:DD:EE:FF",
             duration_ms=5000,
-            timeout_sec=1
+            timeout_sec=1,
         )
 
         mock_sock.send.assert_called_once()
@@ -569,10 +555,7 @@ class TestSignalDevice:
         mock_sock.recv.return_value = b"\x00" * 100  # Fake response
 
         result = signal_device(
-            mock_sock,
-            b"\x00\x11\x22\x33\x44\x55",
-            "AA:BB:CC:DD:EE:FF",
-            timeout_sec=1
+            mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", timeout_sec=1
         )
 
         assert result is True
@@ -584,15 +567,14 @@ class TestResetToFactory:
     def test_reset_to_factory_sends_request(self):
         """Test reset_to_factory sends Control/ResetToFactory request."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = reset_to_factory(
             mock_sock,
             b"\x00\x11\x22\x33\x44\x55",
             "AA:BB:CC:DD:EE:FF",
             mode=RESET_MODE_COMMUNICATION,
-            timeout_sec=1
+            timeout_sec=1,
         )
 
         mock_sock.send.assert_called_once()
@@ -608,7 +590,7 @@ class TestResetToFactory:
             b"\x00\x11\x22\x33\x44\x55",
             "AA:BB:CC:DD:EE:FF",
             mode=RESET_MODE_COMMUNICATION,
-            timeout_sec=1
+            timeout_sec=1,
         )
 
         assert result is True
@@ -630,7 +612,7 @@ class TestConstants:
 
 from profinet.dcp import (
     DCP_MAX_NAME_LENGTH,
-    DCP_OPTION_LLDP,
+    DCP_OPTION_RESERVED,
     DCPResponseCode,
 )
 
@@ -683,26 +665,25 @@ class TestDCPResponseCode:
         assert "0xFF" in name
 
 
-class TestDCPOptionLLDP:
-    """Test DCP_OPTION_LLDP constant."""
+class TestDCPOptionReserved:
+    """Test DCP_OPTION_RESERVED constant."""
 
-    def test_lldp_option_value(self):
-        """Test LLDP option is 0x04."""
-        assert DCP_OPTION_LLDP == 0x04
+    def test_reserved_option_value(self):
+        """Test Reserved option is 0x04."""
+        assert DCP_OPTION_RESERVED == 0x04
 
-    def test_lldp_in_option_names(self):
-        """Test LLDP is in option names mapping."""
+    def test_reserved_in_option_names(self):
+        """Test Reserved is in option names mapping."""
         from profinet.dcp import DCP_OPTION_NAMES
-        assert 0x04 in DCP_OPTION_NAMES
-        assert DCP_OPTION_NAMES[0x04] == "LLDP"
 
-    def test_lldp_suboptions_defined(self):
-        """Test LLDP suboptions are defined."""
+        assert 0x04 in DCP_OPTION_NAMES
+        assert DCP_OPTION_NAMES[0x04] == "Reserved"
+
+    def test_reserved_no_suboptions(self):
+        """Test Reserved option has no suboptions defined."""
         from profinet.dcp import DCP_SUBOPTION_NAMES
-        assert 0x04 in DCP_SUBOPTION_NAMES
-        lldp_subopts = DCP_SUBOPTION_NAMES[0x04]
-        assert 0x01 in lldp_subopts  # PortID
-        assert 0x02 in lldp_subopts  # ChassisID
+
+        assert 0x04 not in DCP_SUBOPTION_NAMES
 
 
 class TestSetParamNameLengthValidation:
@@ -715,18 +696,13 @@ class TestSetParamNameLengthValidation:
 
         with pytest.raises(ValueError, match="exceeds maximum length"):
             set_param(
-                mock_sock,
-                b"\x00\x11\x22\x33\x44\x55",
-                "AA:BB:CC:DD:EE:FF",
-                "name",
-                long_name
+                mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", "name", long_name
             )
 
     def test_set_param_name_at_limit(self):
         """Test set_param accepts names at exactly 240 chars."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         max_name = "x" * 240
         # Should not raise ValueError, but may timeout
@@ -736,7 +712,7 @@ class TestSetParamNameLengthValidation:
             "AA:BB:CC:DD:EE:FF",
             "name",
             max_name,
-            timeout_sec=1
+            timeout_sec=1,
         )
         # Even though it times out, it shouldn't have raised ValueError
         assert result is False  # Timeout means no response
@@ -744,8 +720,7 @@ class TestSetParamNameLengthValidation:
     def test_set_param_name_under_limit(self):
         """Test set_param accepts names under 240 chars."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         normal_name = "my-device-name"
         result = set_param(
@@ -754,7 +729,7 @@ class TestSetParamNameLengthValidation:
             "AA:BB:CC:DD:EE:FF",
             "name",
             normal_name,
-            timeout_sec=1
+            timeout_sec=1,
         )
         # Should execute without ValueError
         assert result is False  # Timeout means no response
@@ -762,8 +737,7 @@ class TestSetParamNameLengthValidation:
     def test_set_param_ip_no_length_check(self):
         """Test set_param for IP param doesn't apply name length check."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         # IP address value - should not trigger name length validation
         result = set_param(
@@ -772,7 +746,7 @@ class TestSetParamNameLengthValidation:
             "AA:BB:CC:DD:EE:FF",
             "ip",
             "192.168.1.100",
-            timeout_sec=1
+            timeout_sec=1,
         )
         assert result is False  # Timeout means no response
 
@@ -782,31 +756,23 @@ class TestSetParamNameLengthValidation:
 # =============================================================================
 
 
+import struct
+
 from profinet.dcp import (
-    IPBlockInfo,
-    BlockQualifier,
-    ResetQualifier,
-    DeviceInitiative,
-    DCPDHCPBlock,
-    DCPLLDPBlock,
-    DCP_SUBOPTION_DHCP_HOSTNAME,
-    DCP_SUBOPTION_DHCP_CLIENT_ID,
-    DCP_SUBOPTION_DHCP_VENDOR_SPEC,
-    DCP_SUBOPTION_DHCP_FQDN,
-    DCP_SUBOPTION_DHCP_UUID,
-    DCP_SUBOPTION_LLDP_PORT_ID,
-    DCP_SUBOPTION_LLDP_CHASSIS_ID,
-    DCP_SUBOPTION_LLDP_TTL,
-    DCP_SUBOPTION_LLDP_PORT_DESC,
-    DCP_SUBOPTION_LLDP_SYSTEM_NAME,
-    DCP_SUBOPTION_LLDP_SYSTEM_DESC,
-    DCP_SUBOPTION_LLDP_SYSTEM_CAP,
-    DCP_SUBOPTION_LLDP_MGMT_ADDR,
     DCP_OPTION_DEVICE_INITIATIVE,
     DCP_SUBOPTION_DEVICE_INITIATIVE,
+    DCP_SUBOPTION_DHCP_CLIENT_ID,
+    DCP_SUBOPTION_DHCP_FQDN,
+    DCP_SUBOPTION_DHCP_HOSTNAME,
+    DCP_SUBOPTION_DHCP_UUID,
+    DCP_SUBOPTION_DHCP_VENDOR_SPEC,
+    BlockQualifier,
+    DCPDHCPBlock,
+    DeviceInitiative,
+    IPBlockInfo,
+    ResetQualifier,
     set_ip,
 )
-import struct
 
 
 class TestIPBlockInfo:
@@ -951,7 +917,7 @@ class TestDCPDHCPBlock:
 
     def test_parse_vendor_specific(self):
         """Test parsing DHCP vendor specific block."""
-        data = b"\xDE\xAD\xBE\xEF"
+        data = b"\xde\xad\xbe\xef"
         block = DCPDHCPBlock.parse(DCP_SUBOPTION_DHCP_VENDOR_SPEC, data)
         assert block.vendor_specific == data
         assert block.suboption_name == "VendorSpec"
@@ -984,66 +950,8 @@ class TestDCPDHCPBlock:
 
 
 # =============================================================================
-# DCPLLDPBlock Tests
+# DCP Option 0x04 (Reserved) Tests
 # =============================================================================
-
-
-class TestDCPLLDPBlock:
-    """Test DCPLLDPBlock parsing."""
-
-    def test_parse_port_id(self):
-        """Test parsing LLDP port ID block."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_PORT_ID, b"port-001\x00")
-        assert block.port_id == "port-001"
-        assert block.suboption_name == "PortID"
-
-    def test_parse_chassis_id(self):
-        """Test parsing LLDP chassis ID block."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_CHASSIS_ID, b"my-device\x00")
-        assert block.chassis_id == "my-device"
-
-    def test_parse_ttl(self):
-        """Test parsing LLDP TTL block."""
-        data = struct.pack(">H", 120)
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_TTL, data)
-        assert block.ttl == 120
-
-    def test_parse_ttl_short_data(self):
-        """Test parsing LLDP TTL with short data."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_TTL, b"\x00")
-        assert block.ttl is None
-
-    def test_parse_port_description(self):
-        """Test parsing LLDP port description block."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_PORT_DESC, b"Ethernet Port 1\x00")
-        assert block.port_description == "Ethernet Port 1"
-
-    def test_parse_system_name(self):
-        """Test parsing LLDP system name block."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_NAME, b"my-switch\x00")
-        assert block.system_name == "my-switch"
-
-    def test_parse_system_description(self):
-        """Test parsing LLDP system description block."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_DESC, b"Industrial Switch v2.1\x00")
-        assert block.system_description == "Industrial Switch v2.1"
-
-    def test_parse_system_capabilities(self):
-        """Test parsing LLDP system capabilities block."""
-        data = struct.pack(">H", 0x0014)  # Bridge + Router
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_CAP, data)
-        assert block.system_capabilities == 0x0014
-
-    def test_parse_system_capabilities_short_data(self):
-        """Test parsing LLDP system capabilities with short data."""
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_SYSTEM_CAP, b"\x00")
-        assert block.system_capabilities is None
-
-    def test_parse_management_address(self):
-        """Test parsing LLDP management address block."""
-        data = b"\x01\x04\xc0\xa8\x01\x01"
-        block = DCPLLDPBlock.parse(DCP_SUBOPTION_LLDP_MGMT_ADDR, data)
-        assert block.management_address == data.hex()
 
 
 # =============================================================================
@@ -1067,18 +975,18 @@ class TestDCPDeviceDescriptionExtended:
         assert len(device.dhcp_blocks) == 1
         assert device.dhcp_blocks[0].hostname == "dhcp-host"
 
-    def test_lldp_blocks_parsed(self):
-        """Test LLDP blocks are parsed from blocks dict."""
+    def test_reserved_option_blocks_in_raw_blocks(self):
+        """Test option 0x04 (Reserved) blocks go into raw_blocks."""
         mac = b"\x00\x11\x22\x33\x44\x55"
         blocks = {
             PNDCPBlock.NAME_OF_STATION: b"test-device",
-            (0x04, DCP_SUBOPTION_LLDP_SYSTEM_NAME): b"switch-01\x00",
+            (0x04, 0x05): b"switch-01\x00",
         }
 
         device = DCPDeviceDescription(mac, blocks)
 
-        assert len(device.lldp_blocks) == 1
-        assert device.lldp_blocks[0].system_name == "switch-01"
+        # Reserved option data should be in raw_blocks
+        assert (0x04, 0x05) in device.raw_blocks
 
     def test_device_initiative_hello(self):
         """Test device initiative parsing for ISSUE_HELLO."""
@@ -1175,16 +1083,16 @@ class TestDCPDeviceDescriptionExtended:
 
         assert (0x03, DCP_SUBOPTION_DHCP_HOSTNAME) not in device.raw_blocks
 
-    def test_lldp_blocks_not_in_raw_blocks(self):
-        """Test LLDP blocks are excluded from raw_blocks."""
+    def test_reserved_option_in_raw_blocks(self):
+        """Test option 0x04 (Reserved) blocks are stored in raw_blocks."""
         mac = b"\x00\x11\x22\x33\x44\x55"
         blocks = {
-            (0x04, DCP_SUBOPTION_LLDP_PORT_ID): b"port-001\x00",
+            (0x04, 0x01): b"some-data\x00",
         }
 
         device = DCPDeviceDescription(mac, blocks)
 
-        assert (0x04, DCP_SUBOPTION_LLDP_PORT_ID) not in device.raw_blocks
+        assert (0x04, 0x01) in device.raw_blocks
 
     def test_str_with_dhcp_blocks(self):
         """Test str output includes DHCP block info."""
@@ -1200,19 +1108,18 @@ class TestDCPDeviceDescriptionExtended:
         assert "DHCP" in output
         assert "my-host" in output
 
-    def test_str_with_lldp_blocks(self):
-        """Test str output includes LLDP block info."""
+    def test_str_with_reserved_option_blocks(self):
+        """Test str output includes reserved option blocks as unknown."""
         mac = b"\x00\x11\x22\x33\x44\x55"
         blocks = {
             PNDCPBlock.NAME_OF_STATION: b"test-device",
-            (0x04, DCP_SUBOPTION_LLDP_SYSTEM_NAME): b"my-switch\x00",
+            (0x04, 0x05): b"my-switch\x00",
         }
 
         device = DCPDeviceDescription(mac, blocks)
         output = str(device)
 
-        assert "LLDP" in output
-        assert "my-switch" in output
+        assert "Unknown (4,5)" in output
 
     def test_str_with_initiative(self):
         """Test str output includes initiative info."""
@@ -1229,14 +1136,65 @@ class TestDCPDeviceDescriptionExtended:
         assert "Initiative" in output
 
 
+def _build_dcp_set_response(
+    dst_mac: bytes,
+    src_mac: bytes,
+    block_error: int = 0x00,
+    resp_option: int = 0x02,
+    resp_suboption: int = 0x02,
+    service_type: int = 0x01,
+) -> bytes:
+    """Build a mock DCP SET response Ethernet frame.
+
+    DCP SET response layout:
+        Ethernet header: dst(6) + src(6) + ethertype(2)
+        DCP header: frame_id(2) + service_id(1) + service_type(1) + xid(4) + resp(2) + length(2)
+        Control/Response block: option(1) + suboption(1) + length(2)
+            + option_for_response(1) + suboption_for_response(1) + block_error(1) + padding(1)
+
+    Args:
+        dst_mac: Destination MAC (6 bytes)
+        src_mac: Source MAC (6 bytes)
+        block_error: Block error code (0x00 = success)
+        resp_option: The option that was set
+        resp_suboption: The suboption that was set
+        service_type: DCP service type (0x01 = response success)
+
+    Returns:
+        Raw Ethernet frame bytes
+    """
+    # Ethernet header
+    frame = dst_mac + src_mac + struct.pack(">H", 0x8892)
+
+    # Control/Response block payload: option(1) + suboption(1) + block_error(1) + padding(1)
+    ctrl_payload = bytes([resp_option, resp_suboption, block_error, 0x00])
+
+    # Control/Response block header: option=0x05, suboption=0x04, length=3 (excl padding)
+    ctrl_block = bytes([0x05, 0x04]) + struct.pack(">H", 3) + ctrl_payload
+
+    # DCP header
+    dcp_length = len(ctrl_block)
+    dcp_header = struct.pack(
+        ">HBBI HH",
+        0xFEFD,  # frame_id (Get/Set)
+        0x04,  # service_id (SET)
+        service_type,  # service_type
+        0x00000001,  # xid
+        0x0000,  # resp
+        dcp_length,  # length
+    )
+
+    frame += dcp_header + ctrl_block
+    return frame
+
+
 class TestSetIP:
     """Test set_ip function."""
 
     def test_set_ip_sends_request(self):
         """Test set_ip sends SET request."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = set_ip(
             mock_sock,
@@ -1252,9 +1210,60 @@ class TestSetIP:
         assert result is False  # Timeout
 
     def test_set_ip_success(self):
-        """Test set_ip returns True on response."""
+        """Test set_ip returns True when device responds with success."""
         mock_sock = MagicMock()
-        mock_sock.recv.return_value = b"\x00" * 100
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x00,
+            resp_option=0x01,
+            resp_suboption=0x02,
+        )
+        mock_sock.recv.return_value = response
+
+        result = set_ip(
+            mock_sock,
+            src_mac,
+            "AA:BB:CC:DD:EE:FF",
+            "192.168.1.100",
+            "255.255.255.0",
+            "192.168.1.1",
+            timeout_sec=1,
+        )
+
+        assert result is True
+
+    def test_set_ip_error_response(self):
+        """Test set_ip raises DCPError when device responds with error."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x05,  # SET not possible
+            resp_option=0x01,
+            resp_suboption=0x02,
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="DCP SET IP failed"):
+            set_ip(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "192.168.1.100",
+                "255.255.255.0",
+                "192.168.1.1",
+                timeout_sec=1,
+            )
+
+    def test_set_ip_timeout(self):
+        """Test set_ip returns False on timeout (no response)."""
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = TimeoutError()
 
         result = set_ip(
             mock_sock,
@@ -1266,13 +1275,12 @@ class TestSetIP:
             timeout_sec=1,
         )
 
-        assert result is True
+        assert result is False
 
     def test_set_ip_permanent(self):
         """Test set_ip with permanent flag."""
         mock_sock = MagicMock()
-        from socket import timeout as SocketTimeout
-        mock_sock.recv.side_effect = SocketTimeout()
+        mock_sock.recv.side_effect = TimeoutError()
 
         set_ip(
             mock_sock,
@@ -1289,3 +1297,235 @@ class TestSetIP:
         # Verify the permanent qualifier is in the sent data
         sent_data = mock_sock.send.call_args[0][0]
         assert isinstance(sent_data, bytes)
+
+
+class TestSetParamResponseValidation:
+    """Test set_param response validation."""
+
+    def test_set_param_success_response(self):
+        """Test set_param returns True when device responds with success."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x00,
+            resp_option=0x02,
+            resp_suboption=0x02,
+        )
+        mock_sock.recv.return_value = response
+
+        result = set_param(
+            mock_sock,
+            src_mac,
+            "AA:BB:CC:DD:EE:FF",
+            "name",
+            "new-device-name",
+            timeout_sec=1,
+        )
+
+        assert result is True
+
+    def test_set_param_error_response(self):
+        """Test set_param raises DCPError when device responds with error."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x02,  # Suboption not supported
+            resp_option=0x02,
+            resp_suboption=0x02,
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="DCP SET failed"):
+            set_param(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "name",
+                "new-device-name",
+                timeout_sec=1,
+            )
+
+    def test_set_param_timeout_returns_false(self):
+        """Test set_param returns False on timeout (no response)."""
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = TimeoutError()
+
+        result = set_param(
+            mock_sock,
+            b"\x00\x11\x22\x33\x44\x55",
+            "AA:BB:CC:DD:EE:FF",
+            "name",
+            "new-name",
+            timeout_sec=1,
+        )
+
+        assert result is False
+
+    def test_set_param_option_unsupported(self):
+        """Test set_param raises DCPError with 'Option not supported' message."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x01,  # Option not supported
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="Option not supported"):
+            set_param(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "name",
+                "new-name",
+                timeout_sec=1,
+            )
+
+    def test_set_param_resource_error(self):
+        """Test set_param raises DCPError with 'Resource error' message."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x04,  # Resource error
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="Resource error"):
+            set_param(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "name",
+                "new-name",
+                timeout_sec=1,
+            )
+
+    def test_set_param_in_operation(self):
+        """Test set_param raises DCPError with 'In operation' message."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            block_error=0x06,  # In operation
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="In operation"):
+            set_param(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "name",
+                "new-name",
+                timeout_sec=1,
+            )
+
+    def test_set_param_unsupported_service_type(self):
+        """Test set_param raises DCPError when service_type indicates unsupported."""
+        mock_sock = MagicMock()
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
+        device_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=device_mac,
+            service_type=0x05,  # Response unsupported
+        )
+        mock_sock.recv.return_value = response
+
+        with pytest.raises(DCPError, match="not supported"):
+            set_param(
+                mock_sock,
+                src_mac,
+                "AA:BB:CC:DD:EE:FF",
+                "name",
+                "new-name",
+                timeout_sec=1,
+            )
+
+
+class TestDCPBlockErrorConstants:
+    """Test DCP block error constants and names."""
+
+    def test_block_error_ok_value(self):
+        """Test DCP_BLOCK_ERROR_OK constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_OK
+
+        assert DCP_BLOCK_ERROR_OK == 0x00
+
+    def test_block_error_option_unsupported_value(self):
+        """Test DCP_BLOCK_ERROR_OPTION_UNSUPPORTED constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_OPTION_UNSUPPORTED
+
+        assert DCP_BLOCK_ERROR_OPTION_UNSUPPORTED == 0x01
+
+    def test_block_error_suboption_unsupported_value(self):
+        """Test DCP_BLOCK_ERROR_SUBOPTION_UNSUPPORTED constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_SUBOPTION_UNSUPPORTED
+
+        assert DCP_BLOCK_ERROR_SUBOPTION_UNSUPPORTED == 0x02
+
+    def test_block_error_suboption_not_set_value(self):
+        """Test DCP_BLOCK_ERROR_SUBOPTION_NOT_SET constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_SUBOPTION_NOT_SET
+
+        assert DCP_BLOCK_ERROR_SUBOPTION_NOT_SET == 0x03
+
+    def test_block_error_resource_value(self):
+        """Test DCP_BLOCK_ERROR_RESOURCE constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_RESOURCE
+
+        assert DCP_BLOCK_ERROR_RESOURCE == 0x04
+
+    def test_block_error_set_not_possible_value(self):
+        """Test DCP_BLOCK_ERROR_SET_NOT_POSSIBLE constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_SET_NOT_POSSIBLE
+
+        assert DCP_BLOCK_ERROR_SET_NOT_POSSIBLE == 0x05
+
+    def test_block_error_in_operation_value(self):
+        """Test DCP_BLOCK_ERROR_IN_OPERATION constant."""
+        from profinet.dcp import DCP_BLOCK_ERROR_IN_OPERATION
+
+        assert DCP_BLOCK_ERROR_IN_OPERATION == 0x06
+
+    def test_block_error_names_has_all_codes(self):
+        """Test DCP_BLOCK_ERROR_NAMES contains all error codes."""
+        from profinet.dcp import DCP_BLOCK_ERROR_NAMES
+
+        assert 0x00 in DCP_BLOCK_ERROR_NAMES
+        assert 0x01 in DCP_BLOCK_ERROR_NAMES
+        assert 0x02 in DCP_BLOCK_ERROR_NAMES
+        assert 0x03 in DCP_BLOCK_ERROR_NAMES
+        assert 0x04 in DCP_BLOCK_ERROR_NAMES
+        assert 0x05 in DCP_BLOCK_ERROR_NAMES
+        assert 0x06 in DCP_BLOCK_ERROR_NAMES
+
+    def test_block_error_names_ok(self):
+        """Test DCP_BLOCK_ERROR_NAMES for OK."""
+        from profinet.dcp import DCP_BLOCK_ERROR_NAMES
+
+        assert DCP_BLOCK_ERROR_NAMES[0x00] == "OK"
+
+    def test_block_error_names_values(self):
+        """Test DCP_BLOCK_ERROR_NAMES contains meaningful descriptions."""
+        from profinet.dcp import DCP_BLOCK_ERROR_NAMES
+
+        assert "Option not supported" in DCP_BLOCK_ERROR_NAMES[0x01]
+        assert "Suboption not supported" in DCP_BLOCK_ERROR_NAMES[0x02]
+        assert "Suboption not set" in DCP_BLOCK_ERROR_NAMES[0x03]
+        assert "Resource error" in DCP_BLOCK_ERROR_NAMES[0x04]
+        assert "SET not possible" in DCP_BLOCK_ERROR_NAMES[0x05]
+        assert "In operation" in DCP_BLOCK_ERROR_NAMES[0x06]

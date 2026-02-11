@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple
 
 # Diagnosis blocks
 BLOCK_DIAGNOSIS_DATA = 0x0010
-BLOCK_DIAGNOSIS_DATA_QUALIFIED_CHANNEL = 0x0012
+BLOCK_EXPECTED_IDENTIFICATION_DATA = 0x0012
 BLOCK_REAL_IDENTIFICATION_DATA = 0x0013
 
 # I&M blocks
@@ -129,7 +129,7 @@ BLOCK_TYPE_NAMES: Dict[int, str] = {
     BLOCK_IOD_READ_REQ: "IODReadReqHeader",
     BLOCK_IOD_READ_RES: "IODReadResHeader",
     BLOCK_DIAGNOSIS_DATA: "DiagnosisData",
-    BLOCK_DIAGNOSIS_DATA_QUALIFIED_CHANNEL: "DiagnosisDataQualifiedChannel",
+    BLOCK_EXPECTED_IDENTIFICATION_DATA: "ExpectedIdentificationData",
     BLOCK_REAL_IDENTIFICATION_DATA: "RealIdentificationData",
     BLOCK_IM0: "I&M0",
     BLOCK_IM1: "I&M1",
@@ -257,10 +257,10 @@ def get_alarm_type_name(alarm_type: int) -> str:
 # =============================================================================
 
 # IOCR Types - used in IOCRBlockReq/Res
-IOCR_TYPE_INPUT = 0x0001              # InputCR - receive data from device
-IOCR_TYPE_OUTPUT = 0x0002             # OutputCR - send data to device
-IOCR_TYPE_MULTICAST_PROVIDER = 0x0003 # Multicast provider CR
-IOCR_TYPE_MULTICAST_CONSUMER = 0x0004 # Multicast consumer CR
+IOCR_TYPE_INPUT = 0x0001  # InputCR - receive data from device
+IOCR_TYPE_OUTPUT = 0x0002  # OutputCR - send data to device
+IOCR_TYPE_MULTICAST_PROVIDER = 0x0003  # Multicast provider CR
+IOCR_TYPE_MULTICAST_CONSUMER = 0x0004  # Multicast consumer CR
 
 IOCR_TYPE_NAMES: Dict[int, str] = {
     IOCR_TYPE_INPUT: "InputCR",
@@ -270,10 +270,10 @@ IOCR_TYPE_NAMES: Dict[int, str] = {
 }
 
 # IOCR RT Classes (bits 0-3 of IOCRProperties)
-IOCR_RT_CLASS_1 = 0x01   # RT_CLASS_1 (non-IRT, software scheduling)
-IOCR_RT_CLASS_2 = 0x02   # RT_CLASS_2 (reserved)
-IOCR_RT_CLASS_3 = 0x03   # RT_CLASS_3 (IRT, hardware scheduling)
-IOCR_RT_CLASS_UDP = 0x04 # RT_CLASS_UDP (UDP-based RT)
+IOCR_RT_CLASS_1 = 0x01  # RT_CLASS_1 (non-IRT, software scheduling)
+IOCR_RT_CLASS_2 = 0x02  # RT_CLASS_2 (reserved)
+IOCR_RT_CLASS_3 = 0x03  # RT_CLASS_3 (IRT, hardware scheduling)
+IOCR_RT_CLASS_UDP = 0x04  # RT_CLASS_UDP (UDP-based RT)
 
 IOCR_RT_CLASS_NAMES: Dict[int, str] = {
     IOCR_RT_CLASS_1: "RT_CLASS_1",
@@ -304,8 +304,8 @@ ALARM_CR_TYPE_NAMES: Dict[int, str] = {
 }
 
 # AlarmCR Transport (bit 1 of AlarmCRProperties)
-ALARM_TRANSPORT_RTA_CLASS_1 = 0x00   # RT-Acyclic Class 1 (Layer 2)
-ALARM_TRANSPORT_RTA_CLASS_UDP = 0x01 # RT-Acyclic over UDP
+ALARM_TRANSPORT_RTA_CLASS_1 = 0x00  # RT-Acyclic Class 1 (Layer 2)
+ALARM_TRANSPORT_RTA_CLASS_UDP = 0x01  # RT-Acyclic over UDP
 
 ALARM_TRANSPORT_NAMES: Dict[int, str] = {
     ALARM_TRANSPORT_RTA_CLASS_1: "RTA_CLASS_1",
@@ -317,10 +317,10 @@ ALARM_TRANSPORT_NAMES: Dict[int, str] = {
 # AR (Application Relationship) Types
 # =============================================================================
 
-AR_TYPE_IOCAR_SINGLE = 0x0001           # Standard single AR
-AR_TYPE_IOSAR = 0x0006                  # Supervisor AR
+AR_TYPE_IOCAR_SINGLE = 0x0001  # Standard single AR
+AR_TYPE_IOSAR = 0x0006  # Supervisor AR
 AR_TYPE_IOCAR_SINGLE_RT_CLASS_3 = 0x0010  # Single AR with RT_CLASS_3
-AR_TYPE_IOCARSR = 0x0020                # System redundancy AR
+AR_TYPE_IOCARSR = 0x0020  # System redundancy AR
 
 AR_TYPE_NAMES: Dict[int, str] = {
     AR_TYPE_IOCAR_SINGLE: "IOCARSingle",
@@ -334,18 +334,18 @@ AR_TYPE_NAMES: Dict[int, str] = {
 # User Structure Identifiers (USI) for Alarm Items
 # =============================================================================
 
-USI_CHANNEL_DIAGNOSIS = 0x8000          # ChannelDiagnosis
-USI_MULTIPLE_DIAGNOSIS = 0x8001         # MultipleDiagnosis (list of ChannelDiagnosis)
-USI_EXT_CHANNEL_DIAGNOSIS = 0x8002      # ExtChannelDiagnosis
+USI_CHANNEL_DIAGNOSIS = 0x8000  # ChannelDiagnosis
+USI_MULTIPLE_DIAGNOSIS = 0x8001  # MultipleDiagnosis (list of ChannelDiagnosis)
+USI_EXT_CHANNEL_DIAGNOSIS = 0x8002  # ExtChannelDiagnosis
 USI_QUALIFIED_CHANNEL_DIAGNOSIS = 0x8003  # QualifiedChannelDiagnosis
-USI_MAINTENANCE = 0x8100                # MaintenanceItem
-USI_UPLOAD = 0x8200                     # UploadRecord
-USI_IPARAMETER = 0x8201                 # iParameterItem
-USI_RS_ALARM_LOW = 0x8300               # RS_AlarmItem (low priority)
-USI_RS_ALARM_HIGH = 0x8301              # RS_AlarmItem (high priority)
-USI_RS_ALARM_SUBMODULE = 0x8302         # RS_AlarmItem (submodule)
-USI_PE_ALARM = 0x8310                   # PE_AlarmItem (PROFIenergy)
-USI_PRAL_ALARM = 0x8320                 # PRAL_AlarmItem (Pull Request)
+USI_MAINTENANCE = 0x8100  # MaintenanceItem
+USI_UPLOAD = 0x8200  # UploadRecord
+USI_IPARAMETER = 0x8201  # iParameterItem
+USI_RS_ALARM_LOW = 0x8300  # RS_AlarmItem (low priority)
+USI_RS_ALARM_HIGH = 0x8301  # RS_AlarmItem (high priority)
+USI_RS_ALARM_SUBMODULE = 0x8302  # RS_AlarmItem (submodule)
+USI_PE_ALARM = 0x8310  # PE_AlarmItem (PROFIenergy)
+USI_PRAL_ALARM = 0x8320  # PRAL_AlarmItem (Pull Request)
 
 USI_NAMES: Dict[int, str] = {
     USI_CHANNEL_DIAGNOSIS: "ChannelDiagnosis",
@@ -716,13 +716,13 @@ DEVICE_INDICES: List[Tuple[int, str]] = [
 
 # All standard indices for comprehensive enumeration
 ALL_STANDARD_INDICES: List[Tuple[int, str]] = (
-    IM_INDICES +
-    DIAGNOSIS_INDICES["subslot"] +
-    DIAGNOSIS_INDICES["device"] +
-    PORT_INDICES +
-    INTERFACE_INDICES +
-    DEVICE_INDICES +
-    [
+    IM_INDICES
+    + DIAGNOSIS_INDICES["subslot"]
+    + DIAGNOSIS_INDICES["device"]
+    + PORT_INDICES
+    + INTERFACE_INDICES
+    + DEVICE_INDICES
+    + [
         (EXPECTED_ID_SUBSLOT, "ExpectedIdentificationData"),
         (REAL_ID_SUBSLOT, "RealIdentificationData"),
         (MODULE_DIFF_BLOCK, "ModuleDiffBlock"),

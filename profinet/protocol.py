@@ -198,9 +198,7 @@ PNRPCHeader = make_packet(
         "IFACE_UUID_SUPERVISOR": bytes([0xDE, 0xA0, 0x00, 0x03] + _UUID),
         "IFACE_UUID_PARAMSERVER": bytes([0xDE, 0xA0, 0x00, 0x04] + _UUID),
         # Object UUID prefix
-        "OBJECT_UUID_PREFIX": bytes(
-            [0xDE, 0xA0, 0x00, 0x00, 0x6C, 0x97, 0x11, 0xD1, 0x82, 0x71]
-        ),
+        "OBJECT_UUID_PREFIX": bytes([0xDE, 0xA0, 0x00, 0x00, 0x6C, 0x97, 0x11, 0xD1, 0x82, 0x71]),
     },
 )
 
@@ -313,6 +311,11 @@ PNInM0 = make_packet(
     ),
     payload=False,
     statics={"IDX": 0xAFF0},
+)
+
+# Convenience property: combined 16-bit vendor ID (matches DCPDeviceDescription API)
+PNInM0.vendor_id = property(  # type: ignore[attr-defined]
+    lambda self: (self.vendor_id_high << 8) | self.vendor_id_low
 )
 
 

@@ -1,11 +1,10 @@
 """Tests for profinet.alarm_listener module."""
 
-import pytest
 from profinet.alarm_listener import (
-    AlarmEndpoint,
-    AlarmListener,
     FRAME_ID_ALARM_HIGH,
     FRAME_ID_ALARM_LOW,
+    AlarmEndpoint,
+    AlarmListener,
 )
 
 

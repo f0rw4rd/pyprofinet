@@ -9,11 +9,193 @@ Block structures follow the standard format:
 - Variable body depending on block type
 """
 
-import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import construct as cs
+
 from . import indices
+
+# =============================================================================
+# Construct definitions for block-level parsing
+# =============================================================================
+
+BlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+    "version_high" / cs.Int8ub,
+    "version_low" / cs.Int8ub,
+)
+
+MultipleBlockHeaderBody = cs.Struct(
+    "padding" / cs.Bytes(2),
+    "api" / cs.Int32ub,
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+)
+
+PortStatisticStruct = cs.Struct(
+    "counter_status" / cs.Int16ub,
+    "in_octets" / cs.Int32ub,
+    "out_octets" / cs.Int32ub,
+    "in_discards" / cs.Int32ub,
+    "out_discards" / cs.Int32ub,
+    "in_errors" / cs.Int32ub,
+    "out_errors" / cs.Int32ub,
+)
+
+ModuleDiffBlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_len" / cs.Int16ub,
+    "ver_hi" / cs.Int8ub,
+    "ver_lo" / cs.Int8ub,
+)
+
+ModuleDiffSubmoduleStruct = cs.Struct(
+    "subslot_nr" / cs.Int16ub,
+    "submodule_ident" / cs.Int32ub,
+    "submodule_state" / cs.Int16ub,
+)
+
+ModuleDiffModuleStruct = cs.Struct(
+    "slot_nr" / cs.Int16ub,
+    "module_ident" / cs.Int32ub,
+    "module_state" / cs.Int16ub,
+    "num_submodules" / cs.Int16ub,
+)
+
+WriteResponseBlockStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_len" / cs.Int16ub,
+)
+
+SlotSubmoduleStruct = cs.Struct(
+    "slot_nr" / cs.Int16ub,
+    "module_ident" / cs.Int32ub,
+    "num_subslots" / cs.Int16ub,
+)
+
+SubslotStruct = cs.Struct(
+    "subslot_nr" / cs.Int16ub,
+    "submodule_ident" / cs.Int32ub,
+)
+
+ExpectedSubmoduleDataDescStruct = cs.Struct(
+    "data_description" / cs.Int16ub,
+    "submodule_data_length" / cs.Int16ub,
+    "length_iocs" / cs.Int8ub,
+    "length_iops" / cs.Int8ub,
+)
+
+ExpectedSubmoduleEntryStruct = cs.Struct(
+    "subslot_number" / cs.Int16ub,
+    "submodule_ident_number" / cs.Int32ub,
+    "submodule_properties" / cs.Int16ub,
+)
+
+ExpectedSubmoduleAPIStruct = cs.Struct(
+    "api" / cs.Int32ub,
+    "slot_number" / cs.Int16ub,
+    "module_ident_number" / cs.Int32ub,
+    "module_properties" / cs.Int16ub,
+    "num_submodules" / cs.Int16ub,
+)
+
+WriteBlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+    "ver_hi" / cs.Int8ub,
+    "ver_lo" / cs.Int8ub,
+)
+
+WriteBlockBodyStruct = cs.Struct(
+    "seq_num" / cs.Int16ub,
+    "ar_uuid" / cs.Bytes(16),
+    "api" / cs.Int32ub,
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+    "padding" / cs.Int16ub,
+    "index" / cs.Int16ub,
+    "record_data_length" / cs.Int32ub,
+    "rw_padding" / cs.Bytes(24),
+)
+
+WriteMultipleHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+    "ver_hi" / cs.Int8ub,
+    "ver_lo" / cs.Int8ub,
+    "seq_num" / cs.Int16ub,
+    "ar_uuid" / cs.Bytes(16),
+    "api" / cs.Int32ub,
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+    "padding" / cs.Int16ub,
+    "index" / cs.Int16ub,
+    "record_data_length" / cs.Int32ub,
+    "rw_padding" / cs.Bytes(24),
+)
+
+# API + NumberOfModules pair used in ModuleDiffBlock and RealIdentificationData
+ApiCountStruct = cs.Struct(
+    "api" / cs.Int32ub,
+    "count" / cs.Int16ub,
+)
+
+# Single uint16/uint32 big-endian values (replaces standalone cs.Int16ub/Int32ub.parse() calls)
+UInt16ubStruct = cs.Struct("value" / cs.Int16ub)
+UInt32ubStruct = cs.Struct("value" / cs.Int32ub)
+
+# MAU type (uint16) for PDPortDataReal
+MauTypeStruct = cs.Struct("mau_type" / cs.Int16ub)
+
+# Media type (uint32) for PDPortDataReal
+MediaTypeStruct = cs.Struct("media_type" / cs.Int32ub)
+
+# Record data length at fixed offset in WriteMultipleResponse
+RecordDataLenStruct = cs.Struct("record_len" / cs.Int32ub)
+
+# Boundaries pair (DomainBoundary + MulticastBoundary) for PDPortDataReal
+BoundaryPairStruct = cs.Struct(
+    "domain_boundary" / cs.Int32ub,
+    "multicast_boundary" / cs.Int32ub,
+)
+
+# Slot/Subslot pair for PDPortDataReal
+SlotSubslotPairStruct = cs.Struct(
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+)
+
+# Link state pair for PDPortDataReal
+LinkStatePairStruct = cs.Struct(
+    "link_state_port" / cs.Int8ub,
+    "link_state_link" / cs.Int8ub,
+)
+
+# Write response entry fields (parsed at specific offsets within a block)
+# Layout: BlockHeader(4) + Version(2) + SeqNum(2) + AR_UUID(16) +
+#         API(4) + Slot(2) + Subslot(2) + Padding(2) + Index(2) +
+#         RecordDataLength(4) + AddVal1(2) + AddVal2(2) + Status(4) +
+#         Padding(8) = 56 bytes total
+WriteResEntryStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_len" / cs.Int16ub,
+    "ver_hi" / cs.Int8ub,
+    "ver_lo" / cs.Int8ub,
+    "seq_num" / cs.Int16ub,
+    "ar_uuid" / cs.Bytes(16),
+    "api" / cs.Int32ub,
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+    "padding" / cs.Int16ub,
+    "index" / cs.Int16ub,
+    "record_data_length" / cs.Int32ub,
+    "add_val1" / cs.Int16ub,
+    "add_val2" / cs.Int16ub,
+    "status" / cs.Int32ub,
+    "rw_padding" / cs.Bytes(8),
+)
 
 # =============================================================================
 # Data Classes
@@ -171,15 +353,13 @@ def parse_block_header(data: bytes, offset: int = 0) -> Tuple[BlockHeader, int]:
     if len(data) < offset + 6:
         raise ValueError(f"Block header requires 6 bytes, got {len(data) - offset}")
 
-    block_type, block_length, ver_high, ver_low = struct.unpack_from(
-        ">HHBB", data, offset
-    )
+    parsed = BlockHeaderStruct.parse(data[offset : offset + 6])
 
     header = BlockHeader(
-        block_type=block_type,
-        block_length=block_length,
-        version_high=ver_high,
-        version_low=ver_low,
+        block_type=parsed.block_type,
+        block_length=parsed.block_length,
+        version_high=parsed.version_high,
+        version_low=parsed.version_low,
     )
 
     return header, offset + 6
@@ -190,9 +370,7 @@ def align4(offset: int) -> int:
     return (offset + 3) & ~3
 
 
-def parse_multiple_block_header(
-    data: bytes, offset: int = 0
-) -> Tuple[int, int, int, int]:
+def parse_multiple_block_header(data: bytes, offset: int = 0) -> Tuple[int, int, int, int]:
     """
     Parse MultipleBlockHeader (0x0400) body.
 
@@ -209,18 +387,17 @@ def parse_multiple_block_header(
     Returns:
         Tuple of (api, slot, subslot, body_offset where nested blocks start)
     """
-    # Skip 2-byte padding after header
-    offset += 2
-
-    if len(data) < offset + 8:
+    if len(data) < offset + 10:
         raise ValueError("MultipleBlockHeader body requires 8 bytes after padding")
 
-    api, slot, subslot = struct.unpack_from(">IHH", data, offset)
+    parsed = MultipleBlockHeaderBody.parse(data[offset : offset + 10])
 
-    return api, slot, subslot, offset + 8
+    return parsed.api, parsed.slot, parsed.subslot, offset + 10
 
 
-def parse_pd_interface_data_real(data: bytes, offset: int = 0, block_header_size: int = 6) -> InterfaceInfo:
+def parse_pd_interface_data_real(
+    data: bytes, offset: int = 0, block_header_size: int = 6
+) -> InterfaceInfo:
     """
     Parse PDInterfaceDataReal (0x0240) block body.
 
@@ -331,16 +508,21 @@ def parse_pd_port_data_real(
 
     # Slot/Subslot (may override passed values)
     if len(data) >= offset + 4:
-        slot_nr, subslot_nr = struct.unpack_from(">HH", data, offset)
-        slot = slot_nr
-        subslot = subslot_nr
+        _ss = SlotSubslotPairStruct.parse(data[offset : offset + 4])
+        slot = _ss.slot
+        subslot = _ss.subslot
         offset += 4
 
     # Port ID
     if len(data) < offset + 1:
         return PortInfo(
-            slot=slot, subslot=subslot, port_id="", mau_type=0,
-            link_state_port=0, link_state_link=0, media_type=0
+            slot=slot,
+            subslot=subslot,
+            port_id="",
+            mau_type=0,
+            link_state_port=0,
+            link_state_link=0,
+            media_type=0,
         )
 
     port_id_len = data[offset]
@@ -372,9 +554,7 @@ def parse_pd_port_data_real(
         offset += 1
         peer_port_id = ""
         if len(data) >= offset + peer_port_len:
-            peer_port_id = data[offset : offset + peer_port_len].decode(
-                "latin-1", errors="replace"
-            )
+            peer_port_id = data[offset : offset + peer_port_len].decode("latin-1", errors="replace")
             offset += peer_port_len
 
         # Peer chassis ID
@@ -408,7 +588,7 @@ def parse_pd_port_data_real(
     # MAU type
     mau_type = 0
     if len(data) >= offset + 2:
-        (mau_type,) = struct.unpack_from(">H", data, offset)
+        mau_type = MauTypeStruct.parse(data[offset : offset + 2]).mau_type
         offset += 2
 
     # Align
@@ -418,15 +598,18 @@ def parse_pd_port_data_real(
     domain_boundary = 0
     multicast_boundary = 0
     if len(data) >= offset + 8:
-        domain_boundary, multicast_boundary = struct.unpack_from(">II", data, offset)
+        _bnd = BoundaryPairStruct.parse(data[offset : offset + 8])
+        domain_boundary = _bnd.domain_boundary
+        multicast_boundary = _bnd.multicast_boundary
         offset += 8
 
     # Link states
     link_state_port = 0
     link_state_link = 0
     if len(data) >= offset + 2:
-        link_state_port = data[offset]
-        link_state_link = data[offset + 1]
+        _ls = LinkStatePairStruct.parse(data[offset : offset + 2])
+        link_state_port = _ls.link_state_port
+        link_state_link = _ls.link_state_link
         offset += 2
 
     # Align
@@ -435,7 +618,7 @@ def parse_pd_port_data_real(
     # Media type
     media_type = 0
     if len(data) >= offset + 4:
-        (media_type,) = struct.unpack_from(">I", data, offset)
+        media_type = MediaTypeStruct.parse(data[offset : offset + 4]).media_type
 
     return PortInfo(
         slot=slot,
@@ -488,9 +671,7 @@ def parse_pd_real_data(data: bytes) -> PDRealData:
                 # Parse nested blocks within this MultipleBlockHeader
                 while nested_offset + 6 <= block_end:
                     try:
-                        nested_header, nested_body = parse_block_header(
-                            data, nested_offset
-                        )
+                        nested_header, nested_body = parse_block_header(data, nested_offset)
                     except ValueError:
                         break
 
@@ -500,17 +681,13 @@ def parse_pd_real_data(data: bytes) -> PDRealData:
                     # Parse specific block types
                     if nested_header.block_type == indices.BLOCK_PD_INTERFACE_DATA_REAL:
                         try:
-                            result.interface = parse_pd_interface_data_real(
-                                data, nested_body
-                            )
+                            result.interface = parse_pd_interface_data_real(data, nested_body)
                         except (ValueError, IndexError):
                             pass
 
                     elif nested_header.block_type == indices.BLOCK_PD_PORT_DATA_REAL:
                         try:
-                            port = parse_pd_port_data_real(
-                                data, nested_body, slot_nr, subslot_nr
-                            )
+                            port = parse_pd_port_data_real(data, nested_body, slot_nr, subslot_nr)
                             result.ports.append(port)
                         except (ValueError, IndexError):
                             pass
@@ -518,9 +695,7 @@ def parse_pd_real_data(data: bytes) -> PDRealData:
                     nested_offset = nested_end
 
                 result.slots.append(slot_info)
-                result.raw_blocks.append(
-                    (api, slot_nr, subslot_nr, data[new_offset:block_end])
-                )
+                result.raw_blocks.append((api, slot_nr, subslot_nr, data[new_offset:block_end]))
 
             except (ValueError, IndexError):
                 pass
@@ -574,70 +749,73 @@ def parse_real_identification_data(data: bytes) -> RealIdentificationData:
 
     # Version 1.1 has NumberOfAPIs first
     if result.version[0] >= 1 and result.version[1] >= 1:
-        (num_apis,) = struct.unpack_from(">H", data, offset)
+        num_apis = UInt16ubStruct.parse(data[offset : offset + 2]).value
         offset += 2
 
         for _ in range(num_apis):
             if len(data) < offset + 6:
                 break
 
-            (api,) = struct.unpack_from(">I", data, offset)
-            offset += 4
-
-            (num_slots,) = struct.unpack_from(">H", data, offset)
-            offset += 2
+            _ac = ApiCountStruct.parse(data[offset : offset + 6])
+            api = _ac.api
+            num_slots = _ac.count
+            offset += 6
 
             for _ in range(num_slots):
                 if len(data) < offset + 8:
                     break
 
-                slot_nr, module_ident, num_subslots = struct.unpack_from(
-                    ">HIH", data, offset
-                )
+                _s = SlotSubmoduleStruct.parse(data[offset : offset + 8])
+                slot_nr = _s.slot_nr
+                module_ident = _s.module_ident
+                num_subslots = _s.num_subslots
                 offset += 8
 
                 for _ in range(num_subslots):
                     if len(data) < offset + 6:
                         break
 
-                    subslot_nr, submodule_ident = struct.unpack_from(">HI", data, offset)
+                    _ss = SubslotStruct.parse(data[offset : offset + 6])
                     offset += 6
 
                     result.slots.append(
                         SlotInfo(
                             api=api,
                             slot=slot_nr,
-                            subslot=subslot_nr,
+                            subslot=_ss.subslot_nr,
                             module_ident=module_ident,
-                            submodule_ident=submodule_ident,
+                            submodule_ident=_ss.submodule_ident,
                         )
                     )
     else:
         # Version 1.0 - no API level
-        (num_slots,) = struct.unpack_from(">H", data, offset)
+        num_slots = UInt16ubStruct.parse(data[offset : offset + 2]).value
         offset += 2
 
         for _ in range(num_slots):
             if len(data) < offset + 8:
                 break
 
-            slot_nr, module_ident, num_subslots = struct.unpack_from(">HIH", data, offset)
+            _s = SlotSubmoduleStruct.parse(data[offset : offset + 8])
+            slot_nr = _s.slot_nr
+            module_ident = _s.module_ident
+            num_subslots = _s.num_subslots
             offset += 8
 
             for _ in range(num_subslots):
                 if len(data) < offset + 6:
                     break
 
-                subslot_nr, submodule_ident = struct.unpack_from(">HI", data, offset)
+                _ss = SubslotStruct.parse(data[offset : offset + 6])
                 offset += 6
 
                 result.slots.append(
                     SlotInfo(
                         api=0,
                         slot=slot_nr,
-                        subslot=subslot_nr,
+                        subslot=_ss.subslot_nr,
                         module_ident=module_ident,
-                        submodule_ident=submodule_ident,
+                        submodule_ident=_ss.submodule_ident,
                     )
                 )
 
@@ -669,24 +847,16 @@ def parse_port_statistics(data: bytes, offset: int = 0) -> Dict[str, int]:
     if len(data) < offset + 26:
         return result
 
-    (
-        counter_status,
-        in_octets,
-        out_octets,
-        in_discards,
-        out_discards,
-        in_errors,
-        out_errors,
-    ) = struct.unpack_from(">HIIIIII", data, offset)
+    parsed = PortStatisticStruct.parse(data[offset : offset + 26])
 
     result = {
-        "counter_status": counter_status,
-        "in_octets": in_octets,
-        "out_octets": out_octets,
-        "in_discards": in_discards,
-        "out_discards": out_discards,
-        "in_errors": in_errors,
-        "out_errors": out_errors,
+        "counter_status": parsed.counter_status,
+        "in_octets": parsed.in_octets,
+        "out_octets": parsed.out_octets,
+        "in_discards": parsed.in_discards,
+        "out_discards": parsed.out_discards,
+        "in_errors": parsed.in_errors,
+        "out_errors": parsed.out_errors,
     }
 
     return result
@@ -696,9 +866,11 @@ def parse_port_statistics(data: bytes, offset: int = 0) -> Dict[str, int]:
 # ModuleDiffBlock (0x8104) - Response showing module/submodule differences
 # =============================================================================
 
+
 @dataclass
 class ModuleDiffSubmodule:
     """Difference info for a single submodule."""
+
     subslot_number: int = 0
     submodule_ident_number: int = 0
     submodule_state: int = 0
@@ -707,8 +879,7 @@ class ModuleDiffSubmodule:
     def state_name(self) -> str:
         """Human-readable state name."""
         return indices.SUBMODULE_STATE_NAMES.get(
-            self.submodule_state,
-            f"Unknown(0x{self.submodule_state:04X})"
+            self.submodule_state, f"Unknown(0x{self.submodule_state:04X})"
         )
 
     @property
@@ -720,6 +891,7 @@ class ModuleDiffSubmodule:
 @dataclass
 class ModuleDiffModule:
     """Difference info for a single module (slot)."""
+
     api: int = 0
     slot_number: int = 0
     module_ident_number: int = 0
@@ -730,8 +902,7 @@ class ModuleDiffModule:
     def state_name(self) -> str:
         """Human-readable state name."""
         return indices.MODULE_STATE_NAMES.get(
-            self.module_state,
-            f"Unknown(0x{self.module_state:04X})"
+            self.module_state, f"Unknown(0x{self.module_state:04X})"
         )
 
     @property
@@ -743,6 +914,7 @@ class ModuleDiffModule:
 @dataclass
 class ModuleDiffBlock:
     """Parsed ModuleDiffBlock (0x8104)."""
+
     modules: List[ModuleDiffModule] = field(default_factory=list)
 
     @property
@@ -790,17 +962,17 @@ def parse_module_diff_block(data: bytes) -> ModuleDiffBlock:
     offset = 0
 
     # Parse block header
-    block_type, block_len, ver_hi, ver_lo = struct.unpack_from(">HHBB", data, offset)
+    hdr = ModuleDiffBlockHeaderStruct.parse(data[offset : offset + 6])
     offset += 6
 
-    if block_type != indices.BLOCK_MODULE_DIFF_BLOCK:
-        raise ValueError(f"Expected block type 0x8104, got 0x{block_type:04X}")
+    if hdr.block_type != indices.BLOCK_MODULE_DIFF_BLOCK:
+        raise ValueError(f"Expected block type 0x8104, got 0x{hdr.block_type:04X}")
 
     # NumberOfAPIs
     if len(data) < offset + 2:
         return ModuleDiffBlock(modules=[])
 
-    num_apis = struct.unpack_from(">H", data, offset)[0]
+    num_apis = UInt16ubStruct.parse(data[offset : offset + 2]).value
     offset += 2
 
     modules = []
@@ -809,44 +981,43 @@ def parse_module_diff_block(data: bytes) -> ModuleDiffBlock:
         if len(data) < offset + 6:
             break
 
-        api = struct.unpack_from(">I", data, offset)[0]
-        offset += 4
-
-        num_modules = struct.unpack_from(">H", data, offset)[0]
-        offset += 2
+        _ac = ApiCountStruct.parse(data[offset : offset + 6])
+        api = _ac.api
+        num_modules = _ac.count
+        offset += 6
 
         for _ in range(num_modules):
             if len(data) < offset + 10:
                 break
 
-            slot_nr, module_ident, module_state, num_submodules = struct.unpack_from(
-                ">HIHH", data, offset
-            )
+            _mod = ModuleDiffModuleStruct.parse(data[offset : offset + 10])
             offset += 10
 
             submodules = []
-            for _ in range(num_submodules):
+            for _ in range(_mod.num_submodules):
                 if len(data) < offset + 8:
                     break
 
-                subslot_nr, submodule_ident, submodule_state = struct.unpack_from(
-                    ">HIH", data, offset
-                )
+                _sub = ModuleDiffSubmoduleStruct.parse(data[offset : offset + 8])
                 offset += 8
 
-                submodules.append(ModuleDiffSubmodule(
-                    subslot_number=subslot_nr,
-                    submodule_ident_number=submodule_ident,
-                    submodule_state=submodule_state,
-                ))
+                submodules.append(
+                    ModuleDiffSubmodule(
+                        subslot_number=_sub.subslot_nr,
+                        submodule_ident_number=_sub.submodule_ident,
+                        submodule_state=_sub.submodule_state,
+                    )
+                )
 
-            modules.append(ModuleDiffModule(
-                api=api,
-                slot_number=slot_nr,
-                module_ident_number=module_ident,
-                module_state=module_state,
-                submodules=submodules,
-            ))
+            modules.append(
+                ModuleDiffModule(
+                    api=api,
+                    slot_number=_mod.slot_nr,
+                    module_ident_number=_mod.module_ident,
+                    module_state=_mod.module_state,
+                    submodules=submodules,
+                )
+            )
 
     return ModuleDiffBlock(modules=modules)
 
@@ -855,9 +1026,11 @@ def parse_module_diff_block(data: bytes) -> ModuleDiffBlock:
 # IODWriteMultiple Builder (Index 0xE040)
 # =============================================================================
 
+
 @dataclass
 class WriteMultipleResult:
     """Result of a single write in WriteMultiple operation."""
+
     seq_num: int = 0
     api: int = 0
     slot: int = 0
@@ -916,7 +1089,7 @@ class IODWriteMultipleBuilder:
             # 4-byte padding (except last block)
             if i < len(self.writes) - 1:
                 pad_len = (4 - (len(block) % 4)) % 4
-                blocks_data.extend(b'\x00' * pad_len)
+                blocks_data.extend(b"\x00" * pad_len)
 
         header = self._build_header(len(blocks_data))
         return bytes(header) + bytes(blocks_data)
@@ -925,21 +1098,48 @@ class IODWriteMultipleBuilder:
         self, seq: int, api: int, slot: int, subslot: int, index: int, data: bytes
     ) -> bytes:
         """Build a single IODWriteReq block."""
-        block_header = struct.pack(">HHBB", 0x0008, 60, 0x01, 0x00)
-        body = struct.pack(
-            ">H16sIHHHHI24s",
-            seq, self.ar_uuid, api, slot, subslot, 0, index, len(data), bytes(24)
+        block_header = WriteBlockHeaderStruct.build(
+            {
+                "block_type": 0x0008,
+                "block_length": 60,
+                "ver_hi": 0x01,
+                "ver_lo": 0x00,
+            }
+        )
+        body = WriteBlockBodyStruct.build(
+            {
+                "seq_num": seq,
+                "ar_uuid": self.ar_uuid,
+                "api": api,
+                "slot": slot,
+                "subslot": subslot,
+                "padding": 0,
+                "index": index,
+                "record_data_length": len(data),
+                "rw_padding": bytes(24),
+            }
         )
         return block_header + body + data
 
     def _build_header(self, blocks_len: int) -> bytes:
         """Build the outer IODWriteMultipleReq header."""
-        block_header = struct.pack(">HHBB", 0x0008, 60, 0x01, 0x00)
-        body = struct.pack(
-            ">H16sIHHHHI24s",
-            self.seq_num, self.ar_uuid, 0xFFFFFFFF, 0xFFFF, 0xFFFF, 0, self.INDEX, blocks_len, bytes(24)
+        return WriteMultipleHeaderStruct.build(
+            {
+                "block_type": 0x0008,
+                "block_length": 60,
+                "ver_hi": 0x01,
+                "ver_lo": 0x00,
+                "seq_num": self.seq_num,
+                "ar_uuid": self.ar_uuid,
+                "api": 0xFFFFFFFF,
+                "slot": 0xFFFF,
+                "subslot": 0xFFFF,
+                "padding": 0,
+                "index": self.INDEX,
+                "record_data_length": blocks_len,
+                "rw_padding": bytes(24),
+            }
         )
-        return block_header + body
 
 
 def parse_write_multiple_response(data: bytes) -> List[WriteMultipleResult]:
@@ -948,30 +1148,29 @@ def parse_write_multiple_response(data: bytes) -> List[WriteMultipleResult]:
     if len(data) < 64:
         return results
 
-    record_len = struct.unpack_from(">I", data, 36)[0]
+    record_len = RecordDataLenStruct.parse(data[36:40]).record_len
     offset = 64
     end = min(offset + record_len, len(data))
 
     while offset + 56 <= end:
-        block_type, block_len = struct.unpack_from(">HH", data, offset)
-        if block_type != 0x8008:
+        entry = WriteResEntryStruct.parse(data[offset : offset + 56])
+        if entry.block_type != 0x8008:
             break
 
-        seq_num = struct.unpack_from(">H", data, offset + 6)[0]
-        api = struct.unpack_from(">I", data, offset + 24)[0]
-        slot = struct.unpack_from(">H", data, offset + 28)[0]
-        subslot = struct.unpack_from(">H", data, offset + 30)[0]
-        index = struct.unpack_from(">H", data, offset + 34)[0]
-        add_val1 = struct.unpack_from(">H", data, offset + 40)[0]
-        add_val2 = struct.unpack_from(">H", data, offset + 42)[0]
-        status = struct.unpack_from(">I", data, offset + 44)[0]
+        results.append(
+            WriteMultipleResult(
+                seq_num=entry.seq_num,
+                api=entry.api,
+                slot=entry.slot,
+                subslot=entry.subslot,
+                index=entry.index,
+                status=entry.status,
+                additional_value1=entry.add_val1,
+                additional_value2=entry.add_val2,
+            )
+        )
 
-        results.append(WriteMultipleResult(
-            seq_num=seq_num, api=api, slot=slot, subslot=subslot,
-            index=index, status=status, additional_value1=add_val1, additional_value2=add_val2
-        ))
-
-        block_size = 4 + block_len
+        block_size = 4 + entry.block_len
         pad = (4 - (block_size % 4)) % 4
         offset += block_size + pad
 
@@ -982,9 +1181,11 @@ def parse_write_multiple_response(data: bytes) -> List[WriteMultipleResult]:
 # ExpectedSubmodule Structures (0x0104)
 # =============================================================================
 
+
 @dataclass
 class ExpectedSubmoduleDataDescription:
     """Describes I/O data for a submodule."""
+
     data_description: int = 1  # 1=Input, 2=Output
     submodule_data_length: int = 0
     length_iocs: int = 1
@@ -992,18 +1193,20 @@ class ExpectedSubmoduleDataDescription:
 
     def to_bytes(self) -> bytes:
         """Serialize to bytes."""
-        return struct.pack(
-            ">HHBB",
-            self.data_description,
-            self.submodule_data_length,
-            self.length_iocs,
-            self.length_iops,
+        return ExpectedSubmoduleDataDescStruct.build(
+            {
+                "data_description": self.data_description,
+                "submodule_data_length": self.submodule_data_length,
+                "length_iocs": self.length_iocs,
+                "length_iops": self.length_iops,
+            }
         )
 
 
 @dataclass
 class ExpectedSubmodule:
     """Expected submodule within a slot."""
+
     subslot_number: int = 0
     submodule_ident_number: int = 0
     submodule_properties: int = 0
@@ -1015,12 +1218,23 @@ class ExpectedSubmodule:
         return self.submodule_properties & 0x03
 
     def to_bytes(self) -> bytes:
-        """Serialize to bytes."""
-        result = struct.pack(
-            ">HIH",
-            self.subslot_number,
-            self.submodule_ident_number,
-            self.submodule_properties,
+        """Serialize to bytes.
+
+        Per IEC 61158-6-10 and Wireshark/p-net implementations, there is
+        NO NumberOfDataDescriptions field. The data descriptions follow
+        SubmoduleProperties directly, and their count is implied by
+        SubmoduleProperties.type:
+          - NO_IO (0): 1 Input DataDescription (data_length=0)
+          - INPUT (1): 1 Input DataDescription
+          - OUTPUT (2): 1 Output DataDescription
+          - INPUT_OUTPUT (3): 2 DataDescriptions (Input + Output)
+        """
+        result = ExpectedSubmoduleEntryStruct.build(
+            {
+                "subslot_number": self.subslot_number,
+                "submodule_ident_number": self.submodule_ident_number,
+                "submodule_properties": self.submodule_properties,
+            }
         )
         for dd in self.data_descriptions:
             result += dd.to_bytes()
@@ -1030,6 +1244,7 @@ class ExpectedSubmodule:
 @dataclass
 class ExpectedSubmoduleAPI:
     """Expected submodules for a specific API/slot."""
+
     api: int = 0
     slot_number: int = 0
     module_ident_number: int = 0
@@ -1038,13 +1253,14 @@ class ExpectedSubmoduleAPI:
 
     def to_bytes(self) -> bytes:
         """Serialize to bytes."""
-        result = struct.pack(
-            ">IHIHH",
-            self.api,
-            self.slot_number,
-            self.module_ident_number,
-            self.module_properties,
-            len(self.submodules),
+        result = ExpectedSubmoduleAPIStruct.build(
+            {
+                "api": self.api,
+                "slot_number": self.slot_number,
+                "module_ident_number": self.module_ident_number,
+                "module_properties": self.module_properties,
+                "num_submodules": len(self.submodules),
+            }
         )
         for sm in self.submodules:
             result += sm.to_bytes()
@@ -1081,31 +1297,49 @@ class ExpectedSubmoduleBlockReq:
 
         if api_entry is None:
             api_entry = ExpectedSubmoduleAPI(
-                api=api, slot_number=slot, module_ident_number=module_ident,
-                module_properties=0, submodules=[]
+                api=api,
+                slot_number=slot,
+                module_ident_number=module_ident,
+                module_properties=0,
+                submodules=[],
             )
             self.apis.append(api_entry)
 
-        # Build data descriptions
+        # Build data descriptions based on submodule type.
+        # Per IEC 61158-6-10 (confirmed by Wireshark dissector and p-net):
+        # - NO_IO (0): 1 Input DataDescription with data_length=0
+        # - INPUT (1): 1 Input DataDescription
+        # - OUTPUT (2): 1 Output DataDescription
+        # - INPUT_OUTPUT (3): 1 Input + 1 Output DataDescription
         dds = []
-        if submodule_type in (1, 3):  # INPUT or INPUT_OUTPUT
-            dds.append(ExpectedSubmoduleDataDescription(1, input_length, 1, 1))
-        if submodule_type in (2, 3):  # OUTPUT or INPUT_OUTPUT
-            dds.append(ExpectedSubmoduleDataDescription(2, output_length, 1, 1))
         if submodule_type == 0:  # NO_IO
             dds.append(ExpectedSubmoduleDataDescription(1, 0, 1, 1))
+        elif submodule_type == 1:  # INPUT
+            dds.append(ExpectedSubmoduleDataDescription(1, input_length, 1, 1))
+        elif submodule_type == 2:  # OUTPUT
+            dds.append(ExpectedSubmoduleDataDescription(2, output_length, 1, 1))
+        elif submodule_type == 3:  # INPUT_OUTPUT
+            dds.append(ExpectedSubmoduleDataDescription(1, input_length, 1, 1))
+            dds.append(ExpectedSubmoduleDataDescription(2, output_length, 1, 1))
 
-        api_entry.submodules.append(ExpectedSubmodule(
-            subslot, submodule_ident, submodule_type, dds
-        ))
+        api_entry.submodules.append(
+            ExpectedSubmodule(subslot, submodule_ident, submodule_type, dds)
+        )
         return self
 
     def to_bytes(self) -> bytes:
         """Build complete ExpectedSubmoduleBlockReq."""
-        body = struct.pack(">H", len(self.apis))
+        body = UInt16ubStruct.build({"value": len(self.apis)})
         for api in self.apis:
             body += api.to_bytes()
 
         block_len = len(body) + 2
-        header = struct.pack(">HHBB", self.BLOCK_TYPE, block_len, 0x01, 0x00)
+        header = WriteBlockHeaderStruct.build(
+            {
+                "block_type": self.BLOCK_TYPE,
+                "block_length": block_len,
+                "ver_hi": 0x01,
+                "ver_lo": 0x00,
+            }
+        )
         return header + body

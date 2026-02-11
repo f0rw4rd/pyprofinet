@@ -2,6 +2,7 @@
 """Write I&M1 and I&M2 records to device."""
 
 import os
+
 from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
@@ -25,8 +26,8 @@ with ProfinetDevice.discover(DEVICE, INTERFACE) as device:
     im1 = device.read_im1()
     im2 = device.read_im2()
 
-    print(f"\nVerified I&M1:")
+    print("\nVerified I&M1:")
     print(f"  Tag Function: {im1.tag_function}")
     print(f"  Tag Location: {im1.tag_location}")
-    print(f"\nVerified I&M2:")
+    print("\nVerified I&M2:")
     print(f"  Installation Date: {im2.installation_date}")

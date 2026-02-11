@@ -13,7 +13,7 @@
 services:
   profinet-device:
     build:
-      context: /home/feb/pro/msf-ics/docker/mocks/services
+      context: ./docker
       dockerfile: Dockerfile.profinet
     container_name: profinet-test-device
     hostname: profinet-test-device

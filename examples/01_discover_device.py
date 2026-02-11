@@ -10,7 +10,8 @@ Run with: sudo python3 01_discover_device.py
 
 import os
 import sys
-from profinet import ProfinetDevice, PermissionDeniedError, DCPDeviceNotFoundError
+
+from profinet import DCPDeviceNotFoundError, PermissionDeniedError, ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
 DEVICE = os.environ.get("PROFINET_DEVICE", "my-device")  # name or MAC
@@ -41,7 +42,7 @@ with device:
     print(f"Device ID: 0x{info.device_id:04X}")
 
     if info.im0:
-        print(f"\nI&M0:")
+        print("\nI&M0:")
         print(f"  Order ID: {info.order_id}")
         print(f"  Serial: {info.serial_number}")
         print(f"  HW Rev: {info.hardware_revision}")

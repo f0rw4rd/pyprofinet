@@ -75,27 +75,27 @@ class PNIOError(RPCError):
     """
 
     # ErrorDecode values
-    DECODE_PNIO_CM = 0x40      # Connection Management errors
-    DECODE_PNIORW = 0x80       # Read/Write errors
-    DECODE_PNIO = 0x81         # General PNIO errors
+    DECODE_PNIO_CM = 0x40  # Connection Management errors
+    DECODE_PNIORW = 0x80  # Read/Write errors
+    DECODE_PNIO = 0x81  # General PNIO errors
 
     # ErrorCode values
     PNIO_ERROR = 0xDE
-    ERROR_APP = 0x01           # Application error
-    ERROR_RTA = 0xCF           # RTA error
-    ERROR_ALARM_ACK = 0xDA     # Alarm Ack error
-    ERROR_IOD_CONN = 0xDB      # IOD Connect error
-    ERROR_IOD_REL = 0xDC       # IOD Release error
-    ERROR_IOD_CTRL = 0xDD      # IOD Control error
-    ERROR_IOD_RW = 0xDE        # IOD Read/Write error
-    ERROR_MPM = 0xDF           # MPM error
+    ERROR_APP = 0x01  # Application error
+    ERROR_RTA = 0xCF  # RTA error
+    ERROR_ALARM_ACK = 0xDA  # Alarm Ack error
+    ERROR_IOD_CONN = 0xDB  # IOD Connect error
+    ERROR_IOD_REL = 0xDC  # IOD Release error
+    ERROR_IOD_CTRL = 0xDD  # IOD Control error
+    ERROR_IOD_RW = 0xDE  # IOD Read/Write error
+    ERROR_MPM = 0xDF  # MPM error
 
     # ErrorCode1 categories for PNIORW (ErrorDecode=0x80) per IEC 61158-6
-    EC1_INVALID_INDEX = 0xB0     # Invalid index
-    EC1_WRITE_LENGTH = 0xB1      # Write length error
-    EC1_RESOURCE = 0xB2          # Slot/Subslot errors
-    EC1_ACCESS = 0xB3            # Access errors
-    EC1_APPLICATION = 0xB4       # API errors
+    EC1_INVALID_INDEX = 0xB0  # Invalid index
+    EC1_WRITE_LENGTH = 0xB1  # Write length error
+    EC1_RESOURCE = 0xB2  # Slot/Subslot errors
+    EC1_ACCESS = 0xB3  # Access errors
+    EC1_APPLICATION = 0xB4  # API errors
     EC1_USER_SPECIFIC_1 = 0xB5
     EC1_USER_SPECIFIC_2 = 0xB6
     EC1_USER_SPECIFIC_3 = 0xB7
@@ -115,7 +115,7 @@ class PNIOError(RPCError):
     # ErrorCode2 for EC1_RESOURCE (0xB2)
     EC2_INVALID_SLOT = 0x07
     EC2_INVALID_SUBSLOT = 0x08
-    EC2_MODULE_NO_DATA = 0x09     # No data for this module
+    EC2_MODULE_NO_DATA = 0x09  # No data for this module
 
     # ErrorCode2 for EC1_ACCESS (0xB3)
     EC2_ACCESS_INVALID_AREA = 0x00
@@ -136,65 +136,65 @@ class PNIOError(RPCError):
 
     # PNIO-CM ErrorCode1 values (block type references)
     # Request blocks (0x01-0x0F)
-    CM_EC1_AR = 0x01              # ARBlockReq error
-    CM_EC1_IOCR = 0x02            # IOCRBlockReq error
-    CM_EC1_ALARM_CR = 0x03        # AlarmCRBlockReq error
+    CM_EC1_AR = 0x01  # ARBlockReq error
+    CM_EC1_IOCR = 0x02  # IOCRBlockReq error
+    CM_EC1_ALARM_CR = 0x03  # AlarmCRBlockReq error
     CM_EC1_EXPECTED_SUBMOD = 0x04  # ExpectedSubmoduleBlockReq error
-    CM_EC1_MODULE_DIFF = 0x05     # ModuleDiffBlock error
-    CM_EC1_AR_RPC = 0x06          # AR-RPC error
+    CM_EC1_MODULE_DIFF = 0x05  # ModuleDiffBlock error
+    CM_EC1_AR_RPC = 0x06  # AR-RPC error
     # Response blocks (0x81-0x8F = 0x80 | request type)
-    CM_EC1_AR_RES = 0x81          # ARBlockRes error
-    CM_EC1_IOCR_RES = 0x82        # IOCRBlockRes error
-    CM_EC1_ALARM_CR_RES = 0x83    # AlarmCRBlockRes error
-    CM_EC1_MODULE_DIFF_RES = 0x84 # ModuleDiffBlockRes error
+    CM_EC1_AR_RES = 0x81  # ARBlockRes error
+    CM_EC1_IOCR_RES = 0x82  # IOCRBlockRes error
+    CM_EC1_ALARM_CR_RES = 0x83  # AlarmCRBlockRes error
+    CM_EC1_MODULE_DIFF_RES = 0x84  # ModuleDiffBlockRes error
     # CM internal
-    CM_EC1_PRM_SERVER = 0x3D      # Parameter server errors
-    CM_EC1_CMCTL = 0x3E           # CM Controller errors
-    CM_EC1_CMDEV = 0x3F           # CM Device errors
-    CM_EC1_RMPM = 0x40            # Remote Protocol Machine errors
-    CM_EC1_FAULTY_RECORD = 0xFD   # Faulty record
-    CM_EC1_FAULTY_AR = 0xFE       # Faulty AR block
-    CM_EC1_FAULTY_BLOCK = 0xFF    # Faulty block (general)
+    CM_EC1_PRM_SERVER = 0x3D  # Parameter server errors
+    CM_EC1_CMCTL = 0x3E  # CM Controller errors
+    CM_EC1_CMDEV = 0x3F  # CM Device errors
+    CM_EC1_RMPM = 0x40  # Remote Protocol Machine errors
+    CM_EC1_FAULTY_RECORD = 0xFD  # Faulty record
+    CM_EC1_FAULTY_AR = 0xFE  # Faulty AR block
+    CM_EC1_FAULTY_BLOCK = 0xFF  # Faulty block (general)
 
     # PNIO ErrorCode2 values for RMPM (CM_EC1_RMPM = 0x40)
-    RMPM_ARGS_LEN_INVALID = 0x00      # Invalid argument length
-    RMPM_UNKNOWN_BLOCKS = 0x01        # Unknown blocks in request
-    RMPM_IOCR_MISSING = 0x02          # Required IOCR missing
-    RMPM_WRONG_ALCR_COUNT = 0x03      # Wrong AlarmCR block count
-    RMPM_OUT_OF_AR_RESOURCES = 0x04   # Out of AR resources
+    RMPM_ARGS_LEN_INVALID = 0x00  # Invalid argument length
+    RMPM_UNKNOWN_BLOCKS = 0x01  # Unknown blocks in request
+    RMPM_IOCR_MISSING = 0x02  # Required IOCR missing
+    RMPM_WRONG_ALCR_COUNT = 0x03  # Wrong AlarmCR block count
+    RMPM_OUT_OF_AR_RESOURCES = 0x04  # Out of AR resources
 
     # PNIO-CM ErrorCode2 values for AR (CM_EC1_AR = 0x01)
-    CM_AR_INVALID_TYPE = 0x00       # Invalid AR type
-    CM_AR_ALREADY_ACTIVE = 0x01     # AR already active
-    CM_AR_OUT_OF_AR = 0x02          # Out of AR resources
-    CM_AR_OUT_OF_PROVIDER = 0x03    # Out of provider resources
-    CM_AR_OUT_OF_CONSUMER = 0x04    # Out of consumer resources
-    CM_AR_OUT_OF_ALARM = 0x05       # Out of alarm resources
-    CM_AR_OUT_OF_MEMORY = 0x06      # Out of memory
-    CM_AR_INVALID_SESSION = 0x07    # Invalid session key
-    CM_AR_UUID_CONFLICT = 0x08      # AR UUID conflict
+    CM_AR_INVALID_TYPE = 0x00  # Invalid AR type
+    CM_AR_ALREADY_ACTIVE = 0x01  # AR already active
+    CM_AR_OUT_OF_AR = 0x02  # Out of AR resources
+    CM_AR_OUT_OF_PROVIDER = 0x03  # Out of provider resources
+    CM_AR_OUT_OF_CONSUMER = 0x04  # Out of consumer resources
+    CM_AR_OUT_OF_ALARM = 0x05  # Out of alarm resources
+    CM_AR_OUT_OF_MEMORY = 0x06  # Out of memory
+    CM_AR_INVALID_SESSION = 0x07  # Invalid session key
+    CM_AR_UUID_CONFLICT = 0x08  # AR UUID conflict
 
     # PNIO-CM ErrorCode2 values for IOCR (CM_EC1_IOCR = 0x02)
-    CM_IOCR_INVALID_TYPE = 0x00     # Invalid IOCR type
-    CM_IOCR_OUT_OF_RESOURCES = 0x01 # Out of IOCR resources
-    CM_IOCR_INVALID_FRAME_ID = 0x02 # Invalid frame ID
-    CM_IOCR_INVALID_RT_CLASS = 0x03 # Invalid RT class
-    CM_IOCR_INVALID_DATA_LEN = 0x04 # Invalid data length
-    CM_IOCR_CYCLE_CONFLICT = 0x05   # Cycle time conflict
-    CM_IOCR_WATCHDOG_ERR = 0x06     # Watchdog error
+    CM_IOCR_INVALID_TYPE = 0x00  # Invalid IOCR type
+    CM_IOCR_OUT_OF_RESOURCES = 0x01  # Out of IOCR resources
+    CM_IOCR_INVALID_FRAME_ID = 0x02  # Invalid frame ID
+    CM_IOCR_INVALID_RT_CLASS = 0x03  # Invalid RT class
+    CM_IOCR_INVALID_DATA_LEN = 0x04  # Invalid data length
+    CM_IOCR_CYCLE_CONFLICT = 0x05  # Cycle time conflict
+    CM_IOCR_WATCHDOG_ERR = 0x06  # Watchdog error
 
     # PNIO-CM ErrorCode2 values for ExpectedSubmodule (CM_EC1_EXPECTED_SUBMOD = 0x04)
-    CM_SUBMOD_INVALID_SLOT = 0x00   # Invalid slot
+    CM_SUBMOD_INVALID_SLOT = 0x00  # Invalid slot
     CM_SUBMOD_INVALID_SUBSLOT = 0x01  # Invalid subslot
-    CM_SUBMOD_WRONG_MODULE = 0x02   # Wrong module ident
-    CM_SUBMOD_WRONG_SUBMOD = 0x03   # Wrong submodule ident
+    CM_SUBMOD_WRONG_MODULE = 0x02  # Wrong module ident
+    CM_SUBMOD_WRONG_SUBMOD = 0x03  # Wrong submodule ident
     CM_SUBMOD_IO_LEN_MISMATCH = 0x04  # IO length mismatch
 
     # PNIO-CM ErrorCode2 values for CMDEV (CM_EC1_CMDEV = 0x3F)
-    CM_DEV_STATE_CONFLICT = 0x00    # Device state conflict
+    CM_DEV_STATE_CONFLICT = 0x00  # Device state conflict
     CM_DEV_CONNECT_RESOURCE = 0x01  # Connect resource error
-    CM_DEV_ALREADY_OWNED = 0x02     # Already owned by another AR
-    CM_DEV_AR_SET_ABORT = 0x03      # AR set abort
+    CM_DEV_ALREADY_OWNED = 0x02  # Already owned by another AR
+    CM_DEV_AR_SET_ABORT = 0x03  # AR set abort
 
     # Human-readable error messages for PNIORW (ErrorDecode=0x80)
     PNIORW_ERROR_MESSAGES = {
@@ -384,10 +384,10 @@ class PNIOError(RPCError):
         """
         # Byte-swap to convert from big-endian parsed value to Hilscher format
         swapped = (
-            ((args_status & 0xFF) << 24) |
-            (((args_status >> 8) & 0xFF) << 16) |
-            (((args_status >> 16) & 0xFF) << 8) |
-            ((args_status >> 24) & 0xFF)
+            ((args_status & 0xFF) << 24)
+            | (((args_status >> 8) & 0xFF) << 16)
+            | (((args_status >> 16) & 0xFF) << 8)
+            | ((args_status >> 24) & 0xFF)
         )
 
         # Now extract in Hilscher order
@@ -458,10 +458,7 @@ class PNIOError(RPCError):
     def __str__(self) -> str:
         if self.is_cm_error:
             block = self.block_name
-            return (
-                f"{self.args[0]} "
-                f"[CM:{block}, EC2=0x{self.error_code2:02X}]"
-            )
+            return f"{self.args[0]} [CM:{block}, EC2=0x{self.error_code2:02X}]"
         else:
             return (
                 f"{self.args[0]} "

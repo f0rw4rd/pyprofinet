@@ -10,6 +10,7 @@ For read/write operations, use ProfinetDevice.discover() which handles this.
 """
 
 import os
+
 from profinet import epm_lookup
 
 DEVICE_IP = os.environ.get("PROFINET_IP", "192.168.1.100")

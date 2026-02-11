@@ -1,21 +1,22 @@
 """Tests for profinet.exceptions module."""
 
 import pytest
+
 from profinet.exceptions import (
-    ProfinetError,
+    DCPDeviceNotFoundError,
     DCPError,
     DCPTimeoutError,
-    DCPDeviceNotFoundError,
-    RPCError,
-    RPCTimeoutError,
-    RPCFaultError,
-    RPCConnectionError,
-    PNIOError,
-    ValidationError,
-    InvalidMACError,
     InvalidIPError,
-    SocketError,
+    InvalidMACError,
     PermissionDeniedError,
+    PNIOError,
+    ProfinetError,
+    RPCConnectionError,
+    RPCError,
+    RPCFaultError,
+    RPCTimeoutError,
+    SocketError,
+    ValidationError,
 )
 
 

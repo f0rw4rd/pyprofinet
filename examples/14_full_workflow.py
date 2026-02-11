@@ -2,7 +2,8 @@
 """Complete workflow: discover, read, write, verify."""
 
 import os
-from profinet import ProfinetDevice, WriteItem
+
+from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
 DEVICE = os.environ.get("PROFINET_DEVICE", "my-device")

@@ -2,6 +2,7 @@
 """Query EPM (Endpoint Mapper) for RPC endpoints."""
 
 import os
+
 from profinet import epm_lookup
 
 DEVICE_IP = os.environ.get("PROFINET_IP", "192.168.1.100")

@@ -15,20 +15,19 @@ No device connection needed - runs offline.
 """
 
 from profinet import (
-    RTFrame,
-    IOCRConfig,
-    IODataObject,
-    CyclicDataBuilder,
     IOCR_TYPE_INPUT,
     IOCR_TYPE_OUTPUT,
     IOXS_GOOD,
+    CyclicDataBuilder,
+    IOCRConfig,
+    IODataObject,
+    RTFrame,
 )
 from profinet.rt import (
-    DATA_STATUS_VALID,
     DATA_STATUS_PROVIDER_RUN,
-    DATA_STATUS_STATION_OK,
     DATA_STATUS_STATE,
-    ETHERTYPE_PROFINET,
+    DATA_STATUS_STATION_OK,
+    DATA_STATUS_VALID,
     build_ethernet_frame,
     parse_ethernet_frame,
 )
@@ -79,28 +78,24 @@ def demo_iocr_config():
         iocr_type=IOCR_TYPE_OUTPUT,
         iocr_reference=1,
         frame_id=0xC000,
-        send_clock_factor=32,   # 1ms base
-        reduction_ratio=8,      # Every 8 cycles
+        send_clock_factor=32,  # 1ms base
+        reduction_ratio=8,  # Every 8 cycles
         watchdog_factor=3,
         data_length=48,
         objects=[
             IODataObject(
-                slot=1, subslot=1,
-                frame_offset=0, data_length=8,
-                iops_offset=8, iocs_offset=0
+                slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8, iocs_offset=0
             ),
             IODataObject(
-                slot=2, subslot=1,
-                frame_offset=9, data_length=4,
-                iops_offset=13, iocs_offset=0
+                slot=2, subslot=1, frame_offset=9, data_length=4, iops_offset=13, iocs_offset=0
             ),
         ],
     )
 
-    print(f"Output IOCR (Controller -> Device):")
+    print("Output IOCR (Controller -> Device):")
     print(f"  Frame ID: 0x{output_iocr.frame_id:04X}")
     print(f"  Cycle time: {output_iocr.cycle_time_ms:.1f} ms")
-    print(f"  Watchdog: {output_iocr.watchdog_time_us/1000:.1f} ms")
+    print(f"  Watchdog: {output_iocr.watchdog_time_us / 1000:.1f} ms")
     print(f"  Data length: {output_iocr.data_length} bytes")
     print(f"  IO objects: {len(output_iocr.objects)}")
 
@@ -114,14 +109,12 @@ def demo_iocr_config():
         data_length=32,
         objects=[
             IODataObject(
-                slot=0, subslot=1,
-                frame_offset=0, data_length=4,
-                iops_offset=4, iocs_offset=5
+                slot=0, subslot=1, frame_offset=0, data_length=4, iops_offset=4, iocs_offset=5
             ),
         ],
     )
 
-    print(f"\nInput IOCR (Device -> Controller):")
+    print("\nInput IOCR (Device -> Controller):")
     print(f"  Frame ID: 0x{input_iocr.frame_id:04X}")
     print(f"  Is input: {input_iocr.is_input}")
 
@@ -138,16 +131,8 @@ def demo_cyclic_data_builder():
         frame_id=0xC000,
         data_length=48,
         objects=[
-            IODataObject(
-                slot=1, subslot=1,
-                frame_offset=0, data_length=8,
-                iops_offset=8
-            ),
-            IODataObject(
-                slot=2, subslot=1,
-                frame_offset=10, data_length=4,
-                iops_offset=14
-            ),
+            IODataObject(slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8),
+            IODataObject(slot=2, subslot=1, frame_offset=10, data_length=4, iops_offset=14),
         ],
     )
 
@@ -191,7 +176,10 @@ def demo_ethernet_frame():
     rt_frame = RTFrame(
         frame_id=0xC000,
         cycle_counter=42,
-        data_status=DATA_STATUS_VALID | DATA_STATUS_PROVIDER_RUN | DATA_STATUS_STATION_OK | DATA_STATUS_STATE,
+        data_status=DATA_STATUS_VALID
+        | DATA_STATUS_PROVIDER_RUN
+        | DATA_STATUS_STATION_OK
+        | DATA_STATUS_STATE,
         transfer_status=0x00,
         payload=b"\x01\x02\x03\x04" + bytes([IOXS_GOOD]),
     )
@@ -206,7 +194,7 @@ def demo_ethernet_frame():
 
     # Parse it back
     parsed = parse_ethernet_frame(eth_frame)
-    print(f"\nParsed from Ethernet frame:")
+    print("\nParsed from Ethernet frame:")
     print(f"  {parsed}")
     print(f"  Cycle counter matches: {parsed.cycle_counter == 42}")
 

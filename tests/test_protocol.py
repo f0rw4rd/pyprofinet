@@ -1,13 +1,14 @@
 """Tests for profinet.protocol module."""
 
 import pytest
+
 from profinet.protocol import (
     EthernetHeader,
     EthernetVLANHeader,
-    PNDCPHeader,
+    PNBlockHeader,
     PNDCPBlock,
     PNDCPBlockRequest,
-    PNBlockHeader,
+    PNDCPHeader,
 )
 
 
@@ -85,7 +86,7 @@ class TestPNDCPHeader:
 
         pkt = PNDCPHeader(data)
 
-        assert pkt.frame_id == 0xfefe
+        assert pkt.frame_id == 0xFEFE
         assert pkt.service_id == 0x05
         assert pkt.service_type == 0x00
         assert pkt.xid == 0x12345678
@@ -161,12 +162,13 @@ class TestPNBlockHeader:
 # =============================================================================
 
 import struct
+
 from profinet.protocol import (
-    PNRPCHeader,
-    PNNRDData,
-    PNIODHeader,
-    PNARBlockRequest,
-    PNIODReleaseBlock,
+    IOCRAPIObject,
+    IPConfiguration,
+    PNAlarmCRBlockReq,
+    PNAlarmNotificationPDU,
+    PNExpectedSubmoduleDataDescription,
     PNInM0,
     PNInM1,
     PNInM2,
@@ -175,17 +177,13 @@ from profinet.protocol import (
     PNInM5,
     PNInM6,
     PNInM15,
-    IOCRAPIObject,
     PNIOCRBlockRes,
-    PNAlarmCRBlockReq,
-    PNAlarmCRBlockRes,
-    PNAlarmNotificationPDU,
-    PNAlarmAckPDU,
-    PNRTAHeader,
-    PNExpectedSubmoduleDataDescription,
+    PNIODHeader,
     PNIODWriteReq,
     PNIODWriteRes,
-    IPConfiguration,
+    PNNRDData,
+    PNRPCHeader,
+    PNRTAHeader,
 )
 
 
@@ -194,12 +192,7 @@ class TestMakePacketReprStr:
 
     def test_ethernet_header_repr(self):
         """Test EthernetHeader repr shows fields."""
-        data = (
-            b"\x01\x02\x03\x04\x05\x06"
-            + b"\x0a\x0b\x0c\x0d\x0e\x0f"
-            + b"\x88\x92"
-            + b"\x00\x00"
-        )
+        data = b"\x01\x02\x03\x04\x05\x06" + b"\x0a\x0b\x0c\x0d\x0e\x0f" + b"\x88\x92" + b"\x00\x00"
         pkt = EthernetHeader(data)
         r = repr(pkt)
         assert "EthernetHeader" in r
@@ -209,12 +202,7 @@ class TestMakePacketReprStr:
 
     def test_ethernet_header_str(self):
         """Test EthernetHeader str shows formatted fields."""
-        data = (
-            b"\x01\x02\x03\x04\x05\x06"
-            + b"\x0a\x0b\x0c\x0d\x0e\x0f"
-            + b"\x88\x92"
-            + b"\x00\x00"
-        )
+        data = b"\x01\x02\x03\x04\x05\x06" + b"\x0a\x0b\x0c\x0d\x0e\x0f" + b"\x88\x92" + b"\x00\x00"
         pkt = EthernetHeader(data)
         s = str(pkt)
         assert "EthernetHeader" in s
@@ -227,7 +215,7 @@ class TestMakePacketReprStr:
             b"\x01\x02\x03\x04\x05\x06"
             + b"\x0a\x0b\x0c\x0d\x0e\x0f"
             + b"\x88\x92"
-            + b"\xDE\xAD"  # 2 bytes payload
+            + b"\xde\xad"  # 2 bytes payload
         )
         pkt = EthernetHeader(data)
         assert len(pkt) == 16  # 14 header + 2 payload
@@ -246,10 +234,7 @@ class TestMakePacketSerialization:
     def test_ethernet_header_roundtrip(self):
         """Test EthernetHeader parse -> serialize roundtrip."""
         original = (
-            b"\x01\x02\x03\x04\x05\x06"
-            + b"\x0a\x0b\x0c\x0d\x0e\x0f"
-            + b"\x88\x92"
-            + b"\xDE\xAD"
+            b"\x01\x02\x03\x04\x05\x06" + b"\x0a\x0b\x0c\x0d\x0e\x0f" + b"\x88\x92" + b"\xde\xad"
         )
         pkt = EthernetHeader(original)
         serialized = bytes(pkt)
@@ -467,10 +452,10 @@ class TestPNInMStructures:
         data[7] = 0x2A
         # order_id (20 bytes) at offset 8
         order_id = b"6ES7 214-1AG40-0XB0"
-        data[8:8+len(order_id)] = order_id
+        data[8 : 8 + len(order_id)] = order_id
         # serial_number (16 bytes) at offset 28
         serial = b"S V-A6B205082016"
-        data[28:28+len(serial)] = serial
+        data[28 : 28 + len(serial)] = serial
 
         pkt = PNInM0(bytes(data))
         assert pkt.vendor_id_high == 0x00
@@ -483,7 +468,7 @@ class TestPNInMStructures:
         struct.pack_into(">HHBB", data, 0, 0x0021, 54, 1, 0)
         # tag_function (32 bytes) at offset 6
         tag_func = b"Motor Control Unit"
-        data[6:6+len(tag_func)] = tag_func
+        data[6 : 6 + len(tag_func)] = tag_func
         # tag_location (22 bytes) at offset 38
 
         pkt = PNInM1(bytes(data))
@@ -494,7 +479,7 @@ class TestPNInMStructures:
         data = bytearray(22)
         struct.pack_into(">HHBB", data, 0, 0x0022, 16, 1, 0)
         date_str = b"2024-01-15 10:30"
-        data[6:6+len(date_str)] = date_str
+        data[6 : 6 + len(date_str)] = date_str
 
         pkt = PNInM2(bytes(data))
         assert b"2024-01-15" in pkt.im_date
@@ -504,7 +489,7 @@ class TestPNInMStructures:
         data = bytearray(60)
         struct.pack_into(">HHBB", data, 0, 0x0023, 54, 1, 0)
         desc = b"Test descriptor"
-        data[6:6+len(desc)] = desc
+        data[6 : 6 + len(desc)] = desc
 
         pkt = PNInM3(bytes(data))
         assert b"Test descriptor" in pkt.im_descriptor
@@ -514,7 +499,7 @@ class TestPNInMStructures:
         data = bytearray(70)
         struct.pack_into(">HHBB", data, 0, 0x0025, 64, 1, 0)
         annotation = b"Production line 4, Station 12"
-        data[6:6+len(annotation)] = annotation
+        data[6 : 6 + len(annotation)] = annotation
 
         pkt = PNInM5(bytes(data))
         assert b"Production line 4" in pkt.im_annotation

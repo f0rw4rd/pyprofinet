@@ -11,15 +11,62 @@ Per IEC 61158-6-10.
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
+import construct as cs
+
 from . import indices
+
+# Construct definitions for alarm parsing
+_DiagnosisBaseStruct = cs.Struct(
+    "channel_number" / cs.Int16ub,
+    "channel_properties" / cs.Int16ub,
+    "error_type" / cs.Int16ub,
+)
+
+_ExtDiagnosisStruct = cs.Struct(
+    "ext_error_type" / cs.Int16ub,
+    "ext_add_value" / cs.Int32ub,
+)
+
+_BlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+    "ver_high" / cs.Int8ub,
+    "ver_low" / cs.Int8ub,
+)
+
+_AlarmNotificationBodyStruct = cs.Struct(
+    "alarm_type" / cs.Int16ub,
+    "api" / cs.Int32ub,
+    "slot_number" / cs.Int16ub,
+    "subslot_number" / cs.Int16ub,
+    "module_ident" / cs.Int32ub,
+    "submodule_ident" / cs.Int32ub,
+    "alarm_specifier" / cs.Int16ub,
+)
+
+_PralStruct = cs.Struct(
+    "channel_num" / cs.Int16ub,
+    "channel_props" / cs.Int16ub,
+    "reason" / cs.Int16ub,
+    "ext_reason" / cs.Int16ub,
+)
+
+# Single-field Structs (replace standalone cs.Int16ub/Int32ub.parse() calls)
+_UInt16ubStruct = cs.Struct("value" / cs.Int16ub)
+_UInt32ubStruct = cs.Struct("value" / cs.Int32ub)
+
+_UploadRetrievalBodyStruct = cs.Struct(
+    "ur_index" / cs.Int32ub,
+    "ur_length" / cs.Int32ub,
+)
 
 # =============================================================================
 # Alarm Item Base Classes
 # =============================================================================
+
 
 @dataclass
 class AlarmItem:
@@ -28,6 +75,7 @@ class AlarmItem:
     All alarm items start with UserStructureIdentifier (USI).
     USI determines the item type and parsing format.
     """
+
     user_structure_id: int = 0
     raw_data: bytes = b""
 
@@ -41,6 +89,7 @@ class AlarmItem:
 # Specific Alarm Item Types
 # =============================================================================
 
+
 @dataclass
 class DiagnosisItem(AlarmItem):
     """Diagnosis alarm item (USI 0x8000, 0x8002, 0x8003).
@@ -50,6 +99,7 @@ class DiagnosisItem(AlarmItem):
     - 0x8002: + ExtChannelErrorType(2) + ExtChannelAddValue(4)
     - 0x8003: + QualifiedChannelQualifier(4)
     """
+
     channel_number: int = 0
     channel_properties: int = 0
     channel_error_type: int = 0
@@ -92,6 +142,7 @@ class MaintenanceItem(AlarmItem):
 
     Format: BlockHeader(6) + Padding(2) + MaintenanceStatus(4)
     """
+
     user_structure_id: int = indices.USI_MAINTENANCE
     block_type: int = 0
     block_length: int = 0
@@ -115,6 +166,7 @@ class UploadRetrievalItem(AlarmItem):
 
     Format: BlockHeader(6) + Padding(2) + URRecordIndex(4) + URRecordLength(4)
     """
+
     block_type: int = 0
     block_length: int = 0
     block_version: int = 0
@@ -141,6 +193,7 @@ class iParameterItem(AlarmItem):
       iPar_Req_Header(4) + Max_Segm_Size(4) +
       Transfer_Index(4) + Total_iPar_Size(4)
     """
+
     user_structure_id: int = indices.USI_IPARAMETER
     block_type: int = 0
     block_length: int = 0
@@ -157,6 +210,7 @@ class PE_AlarmItem(AlarmItem):
 
     Format: BlockHeader(6) + PE_OperationalMode(1)
     """
+
     user_structure_id: int = indices.USI_PE_ALARM
     block_type: int = 0
     block_length: int = 0
@@ -175,6 +229,7 @@ class RS_AlarmItem(AlarmItem):
 
     Format: RS_AlarmInfo(2)
     """
+
     rs_alarm_info: int = 0
 
     @property
@@ -197,6 +252,7 @@ class PRAL_AlarmItem(AlarmItem):
       PRAL_Reason(2) + PRAL_ExtReason(2) +
       PRAL_ReasonAddValue(variable)
     """
+
     user_structure_id: int = indices.USI_PRAL_ALARM
     channel_number: int = 0
     pral_channel_properties: int = 0
@@ -209,12 +265,14 @@ class PRAL_AlarmItem(AlarmItem):
 # Alarm Notification
 # =============================================================================
 
+
 @dataclass
 class AlarmNotification:
     """Complete parsed alarm notification.
 
     Combines the PDU header with parsed alarm items.
     """
+
     # From block header
     block_type: int = 0
     block_version: Tuple[int, int] = (1, 0)
@@ -265,6 +323,7 @@ class AlarmNotification:
 # Parsing Functions
 # =============================================================================
 
+
 def parse_alarm_item(data: bytes, offset: int = 0) -> Tuple[AlarmItem, int]:
     """Parse a single alarm item from data.
 
@@ -281,7 +340,7 @@ def parse_alarm_item(data: bytes, offset: int = 0) -> Tuple[AlarmItem, int]:
     if len(data) < offset + 2:
         raise ValueError("Insufficient data for USI")
 
-    usi = struct.unpack_from(">H", data, offset)[0]
+    usi = _UInt16ubStruct.parse(data[offset : offset + 2]).value
     offset += 2
 
     # Dispatch to specific parser based on USI
@@ -295,7 +354,11 @@ def parse_alarm_item(data: bytes, offset: int = 0) -> Tuple[AlarmItem, int]:
         return _parse_maintenance_item(data, offset)
     elif usi in (indices.USI_UPLOAD, indices.USI_IPARAMETER):
         return _parse_upload_retrieval_item(data, offset, usi)
-    elif usi in (indices.USI_RS_ALARM_LOW, indices.USI_RS_ALARM_HIGH, indices.USI_RS_ALARM_SUBMODULE):
+    elif usi in (
+        indices.USI_RS_ALARM_LOW,
+        indices.USI_RS_ALARM_HIGH,
+        indices.USI_RS_ALARM_SUBMODULE,
+    ):
         return _parse_rs_alarm_item(data, offset, usi)
     elif usi == indices.USI_PE_ALARM:
         return _parse_pe_alarm_item(data, offset)
@@ -312,7 +375,10 @@ def _parse_diagnosis_item(data: bytes, offset: int, usi: int) -> Tuple[Diagnosis
     if len(data) < offset + 6:
         raise ValueError("Truncated DiagnosisItem")
 
-    channel_number, channel_props, error_type = struct.unpack_from(">HHH", data, offset)
+    parsed = _DiagnosisBaseStruct.parse(data[offset : offset + 6])
+    channel_number = parsed.channel_number
+    channel_props = parsed.channel_properties
+    error_type = parsed.error_type
     offset += 6
 
     item = DiagnosisItem(
@@ -326,7 +392,9 @@ def _parse_diagnosis_item(data: bytes, offset: int, usi: int) -> Tuple[Diagnosis
     if usi in (indices.USI_EXT_CHANNEL_DIAGNOSIS, indices.USI_QUALIFIED_CHANNEL_DIAGNOSIS):
         if len(data) < offset + 6:
             raise ValueError("Truncated ExtChannelDiagnosis")
-        ext_error_type, ext_add_value = struct.unpack_from(">HI", data, offset)
+        parsed_ext = _ExtDiagnosisStruct.parse(data[offset : offset + 6])
+        ext_error_type = parsed_ext.ext_error_type
+        ext_add_value = parsed_ext.ext_add_value
         item.ext_channel_error_type = ext_error_type
         item.ext_channel_add_value = ext_add_value
         offset += 6
@@ -335,7 +403,7 @@ def _parse_diagnosis_item(data: bytes, offset: int, usi: int) -> Tuple[Diagnosis
     if usi == indices.USI_QUALIFIED_CHANNEL_DIAGNOSIS:
         if len(data) < offset + 4:
             raise ValueError("Truncated QualifiedChannelDiagnosis")
-        (qualifier,) = struct.unpack_from(">I", data, offset)
+        qualifier = _UInt32ubStruct.parse(data[offset : offset + 4]).value
         item.qualified_channel_qualifier = qualifier
         offset += 4
 
@@ -348,44 +416,46 @@ def _parse_maintenance_item(data: bytes, offset: int) -> Tuple[MaintenanceItem, 
     if len(data) < offset + 12:
         raise ValueError("Truncated MaintenanceItem")
 
-    block_type, block_len, ver_high, ver_low = struct.unpack_from(">HHBB", data, offset)
+    hdr = _BlockHeaderStruct.parse(data[offset : offset + 6])
     offset += 6
 
     # Skip 2-byte padding
     offset += 2
 
-    (maint_status,) = struct.unpack_from(">I", data, offset)
+    maint_status = _UInt32ubStruct.parse(data[offset : offset + 4]).value
     offset += 4
 
     return MaintenanceItem(
         user_structure_id=indices.USI_MAINTENANCE,
-        block_type=block_type,
-        block_length=block_len,
-        block_version=(ver_high << 8) | ver_low,
+        block_type=hdr.block_type,
+        block_length=hdr.block_length,
+        block_version=(hdr.ver_high << 8) | hdr.ver_low,
         maintenance_status=maint_status,
     ), offset
 
 
-def _parse_upload_retrieval_item(data: bytes, offset: int, usi: int) -> Tuple[UploadRetrievalItem, int]:
+def _parse_upload_retrieval_item(
+    data: bytes, offset: int, usi: int
+) -> Tuple[UploadRetrievalItem, int]:
     """Parse UploadRetrievalItem (USI 0x8200, 0x8201)."""
     # BlockHeader(6) + Padding(2) + URRecordIndex(4) + URRecordLength(4) = 16 bytes
     if len(data) < offset + 16:
         raise ValueError("Truncated UploadRetrievalItem")
 
-    block_type, block_len, ver_high, ver_low = struct.unpack_from(">HHBB", data, offset)
+    hdr = _BlockHeaderStruct.parse(data[offset : offset + 6])
     offset += 6
     offset += 2  # Padding
 
-    ur_index, ur_length = struct.unpack_from(">II", data, offset)
+    body = _UploadRetrievalBodyStruct.parse(data[offset : offset + 8])
     offset += 8
 
     return UploadRetrievalItem(
         user_structure_id=usi,
-        block_type=block_type,
-        block_length=block_len,
-        block_version=(ver_high << 8) | ver_low,
-        ur_record_index=ur_index,
-        ur_record_length=ur_length,
+        block_type=hdr.block_type,
+        block_length=hdr.block_length,
+        block_version=(hdr.ver_high << 8) | hdr.ver_low,
+        ur_record_index=body.ur_index,
+        ur_record_length=body.ur_length,
     ), offset
 
 
@@ -395,7 +465,7 @@ def _parse_pe_alarm_item(data: bytes, offset: int) -> Tuple[PE_AlarmItem, int]:
     if len(data) < offset + 7:
         raise ValueError("Truncated PE_AlarmItem")
 
-    block_type, block_len, ver_high, ver_low = struct.unpack_from(">HHBB", data, offset)
+    hdr = _BlockHeaderStruct.parse(data[offset : offset + 6])
     offset += 6
 
     pe_mode = data[offset]
@@ -403,9 +473,9 @@ def _parse_pe_alarm_item(data: bytes, offset: int) -> Tuple[PE_AlarmItem, int]:
 
     return PE_AlarmItem(
         user_structure_id=indices.USI_PE_ALARM,
-        block_type=block_type,
-        block_length=block_len,
-        block_version=(ver_high << 8) | ver_low,
+        block_type=hdr.block_type,
+        block_length=hdr.block_length,
+        block_version=(hdr.ver_high << 8) | hdr.ver_low,
         pe_operational_mode=pe_mode,
     ), offset
 
@@ -416,7 +486,7 @@ def _parse_rs_alarm_item(data: bytes, offset: int, usi: int) -> Tuple[RS_AlarmIt
     if len(data) < offset + 2:
         raise ValueError("Truncated RS_AlarmItem")
 
-    (rs_info,) = struct.unpack_from(">H", data, offset)
+    rs_info = _UInt16ubStruct.parse(data[offset : offset + 2]).value
     offset += 2
 
     return RS_AlarmItem(
@@ -432,9 +502,11 @@ def _parse_pral_alarm_item(data: bytes, offset: int) -> Tuple[PRAL_AlarmItem, in
     if len(data) < offset + 8:
         raise ValueError("Truncated PRAL_AlarmItem")
 
-    channel_num, channel_props, reason, ext_reason = struct.unpack_from(
-        ">HHHH", data, offset
-    )
+    pral = _PralStruct.parse(data[offset : offset + 8])
+    channel_num = pral.channel_num
+    channel_props = pral.channel_props
+    reason = pral.reason
+    ext_reason = pral.ext_reason
     offset += 8
 
     # Remaining bytes are PRAL_ReasonAddValue
@@ -468,27 +540,29 @@ def parse_alarm_notification(data: bytes) -> AlarmNotification:
     offset = 0
 
     # Parse block header
-    block_type, block_len, ver_high, ver_low = struct.unpack_from(">HHBB", data, offset)
+    hdr = _BlockHeaderStruct.parse(data[offset : offset + 6])
+    block_type = hdr.block_type
+    ver_high = hdr.ver_high
+    ver_low = hdr.ver_low
     offset += 6
 
     # Parse PDU body
-    (
-        alarm_type,
-        api,
-        slot_number,
-        subslot_number,
-        module_ident,
-        submodule_ident,
-        alarm_specifier,
-    ) = struct.unpack_from(">HIHHIIH", data, offset)
+    body = _AlarmNotificationBodyStruct.parse(data[offset : offset + 22])
+    alarm_type = body.alarm_type
+    api = body.api
+    slot_number = body.slot_number
+    subslot_number = body.subslot_number
+    module_ident = body.module_ident
+    submodule_ident = body.submodule_ident
+    alarm_specifier = body.alarm_specifier
     offset += 22
 
     # Decode alarm specifier bits
-    seq_num = alarm_specifier & 0x07FF              # Bits 0-10
-    channel_diag = bool(alarm_specifier & 0x0800)   # Bit 11
-    mfr_specific = bool(alarm_specifier & 0x1000)   # Bit 12
-    submod_diag = bool(alarm_specifier & 0x2000)    # Bit 13
-    ar_diag = bool(alarm_specifier & 0x4000)        # Bit 14
+    seq_num = alarm_specifier & 0x07FF  # Bits 0-10
+    channel_diag = bool(alarm_specifier & 0x0800)  # Bit 11
+    mfr_specific = bool(alarm_specifier & 0x1000)  # Bit 12
+    submod_diag = bool(alarm_specifier & 0x2000)  # Bit 13
+    ar_diag = bool(alarm_specifier & 0x4000)  # Bit 14
 
     notification = AlarmNotification(
         block_type=block_type,

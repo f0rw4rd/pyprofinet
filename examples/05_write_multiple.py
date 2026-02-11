@@ -3,6 +3,7 @@
 
 import os
 import struct
+
 from profinet import ProfinetDevice, WriteItem
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
@@ -32,11 +33,15 @@ with ProfinetDevice.discover(DEVICE, INTERFACE) as device:
     # Prepare writes
     writes = [
         WriteItem(
-            slot=0, subslot=1, index=0xAFF1,
+            slot=0,
+            subslot=1,
+            index=0xAFF1,
             data=build_im1_data("Motor Control", "Hall B"),
         ),
         WriteItem(
-            slot=0, subslot=1, index=0xAFF2,
+            slot=0,
+            subslot=1,
+            index=0xAFF2,
             data=build_im2_data("2024-06-20 14:00"),
         ),
     ]

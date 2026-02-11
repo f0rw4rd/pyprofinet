@@ -2,6 +2,7 @@
 """Read alarm notifications from device."""
 
 import os
+
 from profinet import ProfinetDevice
 from profinet.alarms import DiagnosisItem, MaintenanceItem, PE_AlarmItem
 

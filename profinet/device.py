@@ -22,6 +22,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import construct as cs
+
 from . import dcp, indices
 from .alarm_listener import AlarmEndpoint, AlarmListener
 from .alarms import AlarmNotification, parse_alarm_notification
@@ -54,6 +56,18 @@ from .rpc import (
 from .util import ethernet_socket, get_mac
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Construct Struct Definitions
+# =============================================================================
+
+# Block header for I&M write operations (type + length + version)
+_InMBlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+    "version_high" / cs.Int8ub,
+    "version_low" / cs.Int8ub,
+)
 
 
 # =============================================================================
@@ -178,6 +192,7 @@ def scan_dict(interface: str = "eth0", timeout: float = 3.0) -> Dict[str, Device
 @dataclass
 class WriteItem:
     """Single write operation for write_multiple()."""
+
     slot: int
     subslot: int
     index: int
@@ -191,6 +206,7 @@ class DeviceInfo:
 
     Combines DCP discovery info with I&M0 identification data.
     """
+
     # From DCP
     name: str = ""
     ip: str = ""
@@ -340,6 +356,7 @@ class ProfinetDevice:
             if target_mac:
                 # Discovery by MAC address
                 from .dcp import read_response, send_discover
+
                 send_discover(sock, src_mac)
                 responses = read_response(sock, src_mac, timeout_sec=int(timeout))
 
@@ -385,6 +402,7 @@ class ProfinetDevice:
         try:
             # Discover all devices, filter by IP
             from .dcp import read_response, send_discover
+
             send_discover(sock, src_mac)
             responses = read_response(sock, src_mac, timeout_sec=int(timeout))
 
@@ -631,10 +649,7 @@ class ProfinetDevice:
             >>> all_ok = all(r.success for r in results)
         """
         rpc = self._ensure_connected()
-        write_tuples = [
-            (w.slot, w.subslot, w.index, w.data, w.api)
-            for w in writes
-        ]
+        write_tuples = [(w.slot, w.subslot, w.index, w.data, w.api) for w in writes]
         return rpc.write_multiple(write_tuples)
 
     # =========================================================================
@@ -760,8 +775,14 @@ class ProfinetDevice:
 
         # Build I&M1 data: BlockHeader(6) + Padding(2) + TagFunction(32) + TagLocation(22)
         # Total: 62 bytes
-        import struct
-        header = struct.pack(">HHBB", 0x0021, 58, 0x01, 0x00)  # I&M1 block
+        header = _InMBlockHeaderStruct.build(
+            {
+                "block_type": 0x0021,
+                "block_length": 58,
+                "version_high": 0x01,
+                "version_low": 0x00,
+            }
+        )
         padding = b"\x00\x00"
         func_bytes = tag_function.encode("latin-1")[:32].ljust(32, b"\x20")
         loc_bytes = tag_location.encode("latin-1")[:22].ljust(22, b"\x20")
@@ -790,8 +811,14 @@ class ProfinetDevice:
             raise ValueError("date exceeds 16 character limit")
 
         # Build I&M2 data: BlockHeader(6) + Padding(2) + InstallationDate(16)
-        import struct
-        header = struct.pack(">HHBB", 0x0022, 20, 0x01, 0x00)  # I&M2 block
+        header = _InMBlockHeaderStruct.build(
+            {
+                "block_type": 0x0022,
+                "block_length": 20,
+                "version_high": 0x01,
+                "version_low": 0x00,
+            }
+        )
         padding = b"\x00\x00"
         date_bytes = date.encode("latin-1")[:16].ljust(16, b"\x20")
 
@@ -819,8 +846,14 @@ class ProfinetDevice:
             raise ValueError("descriptor exceeds 54 character limit")
 
         # Build I&M3 data: BlockHeader(6) + Padding(2) + Descriptor(54)
-        import struct
-        header = struct.pack(">HHBB", 0x0023, 58, 0x01, 0x00)  # I&M3 block
+        header = _InMBlockHeaderStruct.build(
+            {
+                "block_type": 0x0023,
+                "block_length": 58,
+                "version_high": 0x01,
+                "version_low": 0x00,
+            }
+        )
         padding = b"\x00\x00"
         desc_bytes = descriptor.encode("latin-1")[:54].ljust(54, b"\x20")
 
@@ -975,9 +1008,7 @@ class ProfinetDevice:
             raise RuntimeError("Must be connected first")
 
         if not self._rpc._alarm_cr_enabled:
-            raise RuntimeError(
-                "AlarmCR not established. Reconnect with with_alarm_cr=True"
-            )
+            raise RuntimeError("AlarmCR not established. Reconnect with with_alarm_cr=True")
 
         # Create endpoint from RPC state
         device_mac = self._info.mac

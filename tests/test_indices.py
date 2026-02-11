@@ -1,6 +1,5 @@
 """Tests for profinet.indices module."""
 
-import pytest
 from profinet import indices
 
 

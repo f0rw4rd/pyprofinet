@@ -1740,7 +1740,7 @@ profinet_vendor_map = {
     1803: "Overview Corporation",
     1804: "Taguan Industrial (Shanghai) Co., Ltd.",
     1805: "ELZET 80 Mikrocomputer GmbH & Co. KG",
-    1806: "UNITRONICS (1989)(R\"G) LTD.",
+    1806: 'UNITRONICS (1989)(R"G) LTD.',
     1807: "octogon GmbH",
     1808: "Lucid Vision Labs, Inc.",
     1809: "Shaanxi Yidu Intelligence Technology Co., Ltd.",
