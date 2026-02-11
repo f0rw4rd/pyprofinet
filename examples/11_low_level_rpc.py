@@ -3,14 +3,15 @@
 
 import os
 import re
+
 from profinet import (
+    DCPDeviceDescription,
     RPCCon,
-    get_station_info,
-    send_discover,
-    read_response,
     ethernet_socket,
     get_mac,
-    DCPDeviceDescription,
+    get_station_info,
+    read_response,
+    send_discover,
 )
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")

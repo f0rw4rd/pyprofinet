@@ -2,6 +2,7 @@
 """Read ModuleDiffBlock to check device configuration status."""
 
 import os
+
 from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
@@ -20,7 +21,7 @@ with ProfinetDevice.discover(DEVICE, INTERFACE) as device:
             print(f"  Slot {slot}, Subslot 0x{subslot:04X}: {state}")
 
     # Show detailed info
-    print(f"\nDetailed module status:")
+    print("\nDetailed module status:")
     for mod in diff.modules:
         status = "OK" if mod.is_proper else mod.state_name
         print(f"  Slot {mod.slot_number}: Module 0x{mod.module_ident_number:08X} - {status}")

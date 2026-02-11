@@ -17,9 +17,9 @@ import sys
 import time
 
 from profinet import (
-    ProfinetDevice,
     AlarmNotification,
     PermissionDeniedError,
+    ProfinetDevice,
 )
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
@@ -31,9 +31,11 @@ running = True
 
 def handle_alarm(alarm: AlarmNotification) -> None:
     """Callback for received alarms."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"ALARM RECEIVED: {alarm.alarm_type_name}")
-    print(f"  Location: API={alarm.api}, Slot={alarm.slot_number}, Subslot=0x{alarm.subslot_number:04X}")
+    print(
+        f"  Location: API={alarm.api}, Slot={alarm.slot_number}, Subslot=0x{alarm.subslot_number:04X}"
+    )
     print(f"  Module: 0x{alarm.module_ident_number:08X}")
     print(f"  Submodule: 0x{alarm.submodule_ident_number:08X}")
     print(f"  Sequence: {alarm.alarm_sequence_number}")
@@ -48,7 +50,7 @@ def handle_alarm(alarm: AlarmNotification) -> None:
         print(f"  Items: {len(alarm.items)}")
         for item in alarm.items:
             print(f"    - {item.usi_name} (0x{item.user_structure_id:04X})")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def signal_handler(sig, frame):
@@ -63,7 +65,9 @@ def main():
 
     if not DEVICE:
         print("Usage: sudo PROFINET_DEVICE=<name_or_mac> python3 16_alarm_listener.py")
-        print("  Or:  sudo PROFINET_IFACE=eth0 PROFINET_DEVICE=my-device python3 16_alarm_listener.py")
+        print(
+            "  Or:  sudo PROFINET_IFACE=eth0 PROFINET_DEVICE=my-device python3 16_alarm_listener.py"
+        )
         sys.exit(1)
 
     signal.signal(signal.SIGINT, signal_handler)

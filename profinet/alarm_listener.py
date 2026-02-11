@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import logging
 import socket
-import struct
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import List, Optional
+
+import construct as cs
 
 from .alarms import AlarmNotification, parse_alarm_notification
 from .protocol import PNAlarmAckPDU, PNBlockHeader, PNRTAHeader
@@ -26,6 +27,17 @@ from .util import ethernet_socket
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Construct Struct Definitions for Alarm Listener
+# =============================================================================
+
+# Ethernet header fields: dst_mac(6) + src_mac(6) + ethertype(2) + frame_id(2)
+EthernetAlarmHeaderStruct = cs.Struct(
+    "dst_mac" / cs.Bytes(6),
+    "src_mac" / cs.Bytes(6),
+    "ethertype" / cs.Int16ub,
+    "frame_id" / cs.Int16ub,
+)
 
 # Frame IDs for RT alarms (Layer 2)
 FRAME_ID_ALARM_HIGH = 0xFC01
@@ -33,6 +45,10 @@ FRAME_ID_ALARM_LOW = 0xFE01
 
 # EtherType for PROFINET
 ETHERTYPE_PROFINET = 0x8892
+
+# Pre-built constant bytes for frame construction
+_FRAME_ID_ALARM_LOW_BYTES = cs.Int16ub.build(FRAME_ID_ALARM_LOW)
+_ETHERTYPE_PROFINET_BYTES = cs.Int16ub.build(ETHERTYPE_PROFINET)
 
 
 @dataclass
@@ -98,9 +114,7 @@ class AlarmListener:
         self._send_seq_num: int = 0
         self._recv_seq_num: int = 0
 
-    def add_callback(
-        self, callback: Callable[[AlarmNotification], None]
-    ) -> None:
+    def add_callback(self, callback: Callable[[AlarmNotification], None]) -> None:
         """Register callback for received alarms.
 
         Callbacks are invoked from the listener thread for each
@@ -111,9 +125,7 @@ class AlarmListener:
         """
         self._callbacks.append(callback)
 
-    def remove_callback(
-        self, callback: Callable[[AlarmNotification], None]
-    ) -> None:
+    def remove_callback(self, callback: Callable[[AlarmNotification], None]) -> None:
         """Remove a registered callback.
 
         Args:
@@ -193,9 +205,7 @@ class AlarmListener:
             try:
                 sock = ethernet_socket(self.endpoint.interface, ETHERTYPE_PROFINET)
             except PermissionError as e:
-                raise PermissionError(
-                    f"Raw socket requires root/admin privileges: {e}"
-                ) from e
+                raise PermissionError(f"Raw socket requires root/admin privileges: {e}") from e
         else:
             # UDP socket (port 34964) — works on all platforms
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -235,25 +245,20 @@ class AlarmListener:
         if len(data) < 16:
             return
 
-        # Parse Ethernet header (14 bytes)
-        _dst_mac = data[0:6]
-        src_mac = data[6:12]
-        ethertype = struct.unpack(">H", data[12:14])[0]
+        # Parse Ethernet header (14 bytes) + Frame ID (2 bytes)
+        eth_hdr = EthernetAlarmHeaderStruct.parse(data[:16])
 
-        if ethertype != ETHERTYPE_PROFINET:
+        if eth_hdr.ethertype != ETHERTYPE_PROFINET:
             return
 
         # Check source MAC matches device
-        if src_mac != self.endpoint.device_mac:
+        if eth_hdr.src_mac != self.endpoint.device_mac:
             return
 
-        # Parse Frame ID
-        frame_id = struct.unpack(">H", data[14:16])[0]
-
-        if frame_id == FRAME_ID_ALARM_HIGH:
-            self._process_alarm(data[16:], high_priority=True, src_mac=src_mac)
-        elif frame_id == FRAME_ID_ALARM_LOW:
-            self._process_alarm(data[16:], high_priority=False, src_mac=src_mac)
+        if eth_hdr.frame_id == FRAME_ID_ALARM_HIGH:
+            self._process_alarm(data[16:], high_priority=True, src_mac=eth_hdr.src_mac)
+        elif eth_hdr.frame_id == FRAME_ID_ALARM_LOW:
+            self._process_alarm(data[16:], high_priority=False, src_mac=eth_hdr.src_mac)
 
     def _handle_udp_frame(self) -> None:
         """Process UDP datagram."""
@@ -348,9 +353,7 @@ class AlarmListener:
         """
         try:
             # Build AlarmAck PDU
-            block_type = (
-                0x8001 if alarm.is_high_priority else 0x8002
-            )  # Ack High/Low
+            block_type = 0x8001 if alarm.is_high_priority else 0x8002  # Ack High/Low
             block_length = PNAlarmAckPDU.fmt_size - 4  # Exclude type+length
 
             block_header = PNBlockHeader(
@@ -388,8 +391,7 @@ class AlarmListener:
                 self._send_udp_ack(ack_data, src_addr)
 
             logger.debug(
-                f"Sent AlarmAck for {alarm.alarm_type_name} "
-                f"(seq={alarm.alarm_sequence_number})"
+                f"Sent AlarmAck for {alarm.alarm_type_name} (seq={alarm.alarm_sequence_number})"
             )
 
         except Exception as e:
@@ -417,13 +419,11 @@ class AlarmListener:
 
         # Build complete frame
         # FrameID for alarm ack (same direction as alarm)
-        frame_id = struct.pack(">H", FRAME_ID_ALARM_LOW)
-
         eth_frame = (
             dst_mac
             + self.controller_mac
-            + struct.pack(">H", ETHERTYPE_PROFINET)
-            + frame_id
+            + _ETHERTYPE_PROFINET_BYTES
+            + _FRAME_ID_ALARM_LOW_BYTES
             + bytes(rta_header)
             + ack_data
         )

@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import logging
 import socket
-import struct
 import threading
 import time
 from collections.abc import Callable
@@ -47,6 +46,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 from .rt import (
+    _ETHERTYPE_PROFINET_BYTES,
     DATA_STATUS_PROVIDER_RUN,
     DATA_STATUS_STATE,
     DATA_STATUS_STATION_OK,
@@ -54,6 +54,7 @@ from .rt import (
     ETHERTYPE_PROFINET,
     IOXS_GOOD,
     CyclicDataBuilder,
+    EtherTypeStruct,
     IOCRConfig,
     RTFrame,
 )
@@ -193,7 +194,9 @@ class CyclicController:
         if cycle_ms < 1:
             logger.error(f"Cycle {cycle_ms:.2f}ms too fast - Python can't do <1ms!")
         elif cycle_ms < PYTHON_MIN_CYCLE_MS:
-            logger.warning(f"Cycle {cycle_ms:.0f}ms may cause jitter (use {PYTHON_MIN_CYCLE_MS}ms+)")
+            logger.warning(
+                f"Cycle {cycle_ms:.0f}ms may cause jitter (use {PYTHON_MIN_CYCLE_MS}ms+)"
+            )
 
     def set_output_data(self, slot: int, subslot: int, data: bytes) -> None:
         """Set output data for next cycle.
@@ -337,9 +340,7 @@ class CyclicController:
         try:
             sock = _ethernet_socket(self.interface, ETHERTYPE_PROFINET)
         except PermissionError as e:
-            raise PermissionError(
-                f"Raw socket requires root/admin privileges: {e}"
-            ) from e
+            raise PermissionError(f"Raw socket requires root/admin privileges: {e}") from e
 
         # Non-blocking with short timeout for RX
         sock.settimeout(0.001)  # 1ms
@@ -351,7 +352,7 @@ class CyclicController:
         next_send = time.perf_counter()
         last_send = next_send
 
-        logger.debug(f"TX thread started, cycle={cycle_time_s*1000:.2f}ms")
+        logger.debug(f"TX thread started, cycle={cycle_time_s * 1000:.2f}ms")
 
         while self._running:
             now = time.perf_counter()
@@ -410,12 +411,7 @@ class CyclicController:
         )
 
         # Build Ethernet frame
-        eth_frame = (
-            self.dst_mac
-            + self.src_mac
-            + struct.pack(">H", ETHERTYPE_PROFINET)
-            + frame.to_bytes()
-        )
+        eth_frame = self.dst_mac + self.src_mac + _ETHERTYPE_PROFINET_BYTES + frame.to_bytes()
 
         try:
             self._sock.send(eth_frame)
@@ -429,7 +425,7 @@ class CyclicController:
         watchdog_s = self.input_iocr.watchdog_time_us / 1_000_000
         self.stats.last_receive_time = time.perf_counter()
 
-        logger.debug(f"RX thread started, watchdog={watchdog_s*1000:.1f}ms")
+        logger.debug(f"RX thread started, watchdog={watchdog_s * 1000:.1f}ms")
 
         while self._running:
             try:
@@ -474,7 +470,7 @@ class CyclicController:
 
         # Parse Ethernet header
         src_mac = data[6:12]
-        ethertype = struct.unpack(">H", data[12:14])[0]
+        ethertype = EtherTypeStruct.parse(data[12:14]).ethertype
 
         if ethertype != ETHERTYPE_PROFINET:
             return
@@ -505,9 +501,7 @@ class CyclicController:
         with self._data_lock:
             for obj in self.input_iocr.objects:
                 if obj.frame_offset + obj.data_length <= len(frame.payload):
-                    obj_data = frame.payload[
-                        obj.frame_offset : obj.frame_offset + obj.data_length
-                    ]
+                    obj_data = frame.payload[obj.frame_offset : obj.frame_offset + obj.data_length]
                     self._input_data[(obj.slot, obj.subslot)] = obj_data
 
                     if self._on_input_data:

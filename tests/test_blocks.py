@@ -1,7 +1,9 @@
 """Tests for PROFINET block parsing module."""
 
-import pytest
 import struct
+
+import pytest
+
 from profinet import blocks, indices
 
 
@@ -29,7 +31,7 @@ class TestBlockHeader:
 
     def test_parse_block_header_with_offset(self):
         """Test parsing with non-zero offset."""
-        prefix = b"\xFF\xFF\xFF\xFF"  # 4 bytes of padding
+        prefix = b"\xff\xff\xff\xff"  # 4 bytes of padding
         header_data = struct.pack(">HHBB", 0x0240, 0x0024, 0x01, 0x00)
         data = prefix + header_data
 
@@ -115,7 +117,7 @@ class TestPDInterfaceDataReal:
         """Test MAC address string formatting."""
         info = blocks.InterfaceInfo(
             chassis_id="test",
-            mac_address=b"\xAB\xCD\xEF\x01\x23\x45",
+            mac_address=b"\xab\xcd\xef\x01\x23\x45",
             ip_address=b"\x00\x00\x00\x00",
             subnet_mask=b"\x00\x00\x00\x00",
             gateway=b"\x00\x00\x00\x00",
@@ -244,9 +246,9 @@ class TestPDRealData:
         while len(inner_data) % 4:
             inner_data.append(0)
         # IP/Subnet/GW
-        inner_data.extend(b"\xC0\xA8\x01\x01")
-        inner_data.extend(b"\xFF\xFF\xFF\x00")
-        inner_data.extend(b"\xC0\xA8\x01\x01")
+        inner_data.extend(b"\xc0\xa8\x01\x01")
+        inner_data.extend(b"\xff\xff\xff\x00")
+        inner_data.extend(b"\xc0\xa8\x01\x01")
 
         # Inner block header
         inner_header = struct.pack(">HHBB", 0x0240, len(inner_data) + 2, 1, 0)
@@ -476,19 +478,24 @@ class TestRealDeviceData:
         "0000"  # SlotNumber = 0
         "00010001"  # ModuleIdent
         "0003"  # NumSubslots = 3
-        "0001" "00000001"  # Subslot 1
-        "8000" "00000002"  # Subslot 0x8000
-        "8001" "00000003"  # Subslot 0x8001
+        "0001"
+        "00000001"  # Subslot 1
+        "8000"
+        "00000002"  # Subslot 0x8000
+        "8001"
+        "00000003"  # Subslot 0x8001
         # Slot 1
         "0001"  # SlotNumber = 1
         "00020002"  # ModuleIdent
         "0001"  # NumSubslots = 1
-        "0001" "00000001"  # Subslot 1
+        "0001"
+        "00000001"  # Subslot 1
         # Slot 2
         "0002"  # SlotNumber = 2
         "00030003"  # ModuleIdent
         "0001"  # NumSubslots = 1
-        "0001" "00000001"  # Subslot 1
+        "0001"
+        "00000001"  # Subslot 1
     )
 
     def test_parse_real_identification_sample(self):
@@ -592,94 +599,106 @@ class TestModuleDiffBlock:
 
     def test_all_ok_proper_and_ok(self):
         """Test all_ok returns True when all modules are proper and submodules OK."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=0,
-                module_state=indices.MODULE_STATE_PROPER_MODULE,
-                submodules=[
-                    blocks.ModuleDiffSubmodule(
-                        subslot_number=1,
-                        submodule_state=indices.SUBMODULE_STATE_OK,
-                    ),
-                ],
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=0,
+                    module_state=indices.MODULE_STATE_PROPER_MODULE,
+                    submodules=[
+                        blocks.ModuleDiffSubmodule(
+                            subslot_number=1,
+                            submodule_state=indices.SUBMODULE_STATE_OK,
+                        ),
+                    ],
+                ),
+            ]
+        )
         assert diff.all_ok is True
 
     def test_all_ok_wrong_module(self):
         """Test all_ok returns False when a module is wrong."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=0,
-                module_state=indices.MODULE_STATE_WRONG_MODULE,
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=0,
+                    module_state=indices.MODULE_STATE_WRONG_MODULE,
+                ),
+            ]
+        )
         assert diff.all_ok is False
 
     def test_all_ok_wrong_submodule(self):
         """Test all_ok returns False when a submodule is wrong."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=0,
-                module_state=indices.MODULE_STATE_PROPER_MODULE,
-                submodules=[
-                    blocks.ModuleDiffSubmodule(
-                        subslot_number=1,
-                        submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
-                    ),
-                ],
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=0,
+                    module_state=indices.MODULE_STATE_PROPER_MODULE,
+                    submodules=[
+                        blocks.ModuleDiffSubmodule(
+                            subslot_number=1,
+                            submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
+                        ),
+                    ],
+                ),
+            ]
+        )
         assert diff.all_ok is False
 
     def test_get_mismatches_empty(self):
         """Test get_mismatches returns empty for all-OK block."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=0,
-                module_state=indices.MODULE_STATE_PROPER_MODULE,
-                submodules=[
-                    blocks.ModuleDiffSubmodule(
-                        subslot_number=1,
-                        submodule_state=indices.SUBMODULE_STATE_OK,
-                    ),
-                ],
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=0,
+                    module_state=indices.MODULE_STATE_PROPER_MODULE,
+                    submodules=[
+                        blocks.ModuleDiffSubmodule(
+                            subslot_number=1,
+                            submodule_state=indices.SUBMODULE_STATE_OK,
+                        ),
+                    ],
+                ),
+            ]
+        )
         assert diff.get_mismatches() == []
 
     def test_get_mismatches_with_wrong_module(self):
         """Test get_mismatches reports wrong module."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=3,
-                module_state=indices.MODULE_STATE_WRONG_MODULE,
-                submodules=[
-                    blocks.ModuleDiffSubmodule(
-                        subslot_number=1,
-                        submodule_state=indices.SUBMODULE_STATE_OK,
-                    ),
-                ],
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=3,
+                    module_state=indices.MODULE_STATE_WRONG_MODULE,
+                    submodules=[
+                        blocks.ModuleDiffSubmodule(
+                            subslot_number=1,
+                            submodule_state=indices.SUBMODULE_STATE_OK,
+                        ),
+                    ],
+                ),
+            ]
+        )
         mismatches = diff.get_mismatches()
         assert len(mismatches) == 1
         assert mismatches[0] == (3, 0, "WrongModule")
 
     def test_get_mismatches_with_wrong_submodule(self):
         """Test get_mismatches reports wrong submodule."""
-        diff = blocks.ModuleDiffBlock(modules=[
-            blocks.ModuleDiffModule(
-                slot_number=1,
-                module_state=indices.MODULE_STATE_PROPER_MODULE,
-                submodules=[
-                    blocks.ModuleDiffSubmodule(
-                        subslot_number=0x8001,
-                        submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
-                    ),
-                ],
-            ),
-        ])
+        diff = blocks.ModuleDiffBlock(
+            modules=[
+                blocks.ModuleDiffModule(
+                    slot_number=1,
+                    module_state=indices.MODULE_STATE_PROPER_MODULE,
+                    submodules=[
+                        blocks.ModuleDiffSubmodule(
+                            subslot_number=0x8001,
+                            submodule_state=indices.SUBMODULE_STATE_WRONG_SUBMODULE,
+                        ),
+                    ],
+                ),
+            ]
+        )
         mismatches = diff.get_mismatches()
         assert len(mismatches) == 1
         assert mismatches[0] == (1, 0x8001, "WrongSubmodule")
@@ -688,9 +707,7 @@ class TestModuleDiffBlock:
 class TestParseModuleDiffBlock:
     """Tests for parse_module_diff_block function."""
 
-    def _build_module_diff_block(
-        self, apis_data, block_type=0x8104
-    ):
+    def _build_module_diff_block(self, apis_data, block_type=0x8104):
         """Helper to build a ModuleDiffBlock from API data."""
         # Block header: type(2) + length(2) + version(2)
         body = struct.pack(">H", len(apis_data))  # NumberOfAPIs
@@ -708,13 +725,23 @@ class TestParseModuleDiffBlock:
 
     def test_parse_single_api_single_module(self):
         """Test parsing ModuleDiffBlock with one API and one module."""
-        data = self._build_module_diff_block([
-            (0, [  # API 0
-                (0, 0x00010001, 0x0002, [  # Slot 0, ProperModule
-                    (1, 0x00000001, 0x0007),  # Subslot 1, OK
-                ]),
-            ]),
-        ])
+        data = self._build_module_diff_block(
+            [
+                (
+                    0,
+                    [  # API 0
+                        (
+                            0,
+                            0x00010001,
+                            0x0002,
+                            [  # Slot 0, ProperModule
+                                (1, 0x00000001, 0x0007),  # Subslot 1, OK
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
 
         result = blocks.parse_module_diff_block(data)
 
@@ -731,18 +758,36 @@ class TestParseModuleDiffBlock:
 
     def test_parse_multiple_apis(self):
         """Test parsing ModuleDiffBlock with multiple APIs."""
-        data = self._build_module_diff_block([
-            (0, [  # API 0
-                (0, 0x00010001, 0x0002, [
-                    (1, 0x00000001, 0x0007),
-                ]),
-            ]),
-            (1, [  # API 1
-                (2, 0x00020002, 0x0002, [
-                    (1, 0x00000002, 0x0007),
-                ]),
-            ]),
-        ])
+        data = self._build_module_diff_block(
+            [
+                (
+                    0,
+                    [  # API 0
+                        (
+                            0,
+                            0x00010001,
+                            0x0002,
+                            [
+                                (1, 0x00000001, 0x0007),
+                            ],
+                        ),
+                    ],
+                ),
+                (
+                    1,
+                    [  # API 1
+                        (
+                            2,
+                            0x00020002,
+                            0x0002,
+                            [
+                                (1, 0x00000002, 0x0007),
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
 
         result = blocks.parse_module_diff_block(data)
 
@@ -773,15 +818,25 @@ class TestParseModuleDiffBlock:
 
     def test_parse_multiple_submodules(self):
         """Test parsing module with multiple submodules."""
-        data = self._build_module_diff_block([
-            (0, [
-                (0, 0x00010001, 0x0002, [
-                    (0x0001, 0x00000001, 0x0007),  # OK
-                    (0x8000, 0x00000002, 0x0007),  # OK
-                    (0x8001, 0x00000003, 0x0001),  # WrongSubmodule
-                ]),
-            ]),
-        ])
+        data = self._build_module_diff_block(
+            [
+                (
+                    0,
+                    [
+                        (
+                            0,
+                            0x00010001,
+                            0x0002,
+                            [
+                                (0x0001, 0x00000001, 0x0007),  # OK
+                                (0x8000, 0x00000002, 0x0007),  # OK
+                                (0x8001, 0x00000003, 0x0001),  # WrongSubmodule
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
 
         result = blocks.parse_module_diff_block(data)
 
@@ -851,7 +906,7 @@ class TestParseWriteMultipleResponse:
         # Build IODWriteRes block (0x8008)
         block = bytearray(56)
         struct.pack_into(">HH", block, 0, 0x8008, 52)  # block_type, block_len
-        struct.pack_into(">H", block, 6, 0)   # seq_num
+        struct.pack_into(">H", block, 6, 0)  # seq_num
         struct.pack_into(">I", block, 24, 0)  # api
         struct.pack_into(">H", block, 28, 1)  # slot
         struct.pack_into(">H", block, 30, 1)  # subslot
@@ -892,7 +947,7 @@ class TestIODWriteMultipleBuilder:
 
     def test_build_single_write(self):
         """Test building with single write operation."""
-        ar_uuid = b"\xAA" * 16
+        ar_uuid = b"\xaa" * 16
         builder = blocks.IODWriteMultipleBuilder(ar_uuid)
         builder.add_write(0, 1, 0xAFF1, b"\x01\x02\x03")
 
@@ -906,7 +961,7 @@ class TestIODWriteMultipleBuilder:
 
     def test_build_multiple_writes(self):
         """Test building with multiple write operations."""
-        ar_uuid = b"\xBB" * 16
+        ar_uuid = b"\xbb" * 16
         builder = blocks.IODWriteMultipleBuilder(ar_uuid)
         builder.add_write(0, 1, 0xAFF1, b"\x01\x02")
         builder.add_write(0, 1, 0xAFF2, b"\x03\x04")
@@ -995,7 +1050,7 @@ class TestExpectedSubmodule:
             data_descriptions=[dd],
         )
         data = sm.to_bytes()
-        # H(2) + I(4) + H(2) + DD(6) = 14
+        # H(2) + I(4) + H(2) + DD(6) = 14 (no NumberOfDataDescriptions field)
         assert len(data) == 14
 
 
@@ -1050,8 +1105,7 @@ class TestExpectedSubmoduleBlockReq:
         """Test adding INPUT_OUTPUT submodule creates both data descriptions."""
         builder = blocks.ExpectedSubmoduleBlockReq()
         builder.add_submodule(
-            0, 0, 1, 0x00010001, 0x00000001,
-            submodule_type=3, input_length=10, output_length=8
+            0, 0, 1, 0x00010001, 0x00000001, submodule_type=3, input_length=10, output_length=8
         )
         sm = builder.apis[0].submodules[0]
         assert len(sm.data_descriptions) == 2
@@ -1100,22 +1154,30 @@ class TestBlockHeaderEdgeCases:
 
     def test_body_length_with_zero_block_length(self):
         """Test body_length returns 0 when block_length is 0."""
-        header = blocks.BlockHeader(block_type=0x0400, block_length=0, version_high=1, version_low=0)
+        header = blocks.BlockHeader(
+            block_type=0x0400, block_length=0, version_high=1, version_low=0
+        )
         assert header.body_length == 0
 
     def test_body_length_with_length_one(self):
         """Test body_length returns 0 when block_length is 1 (less than 2)."""
-        header = blocks.BlockHeader(block_type=0x0400, block_length=1, version_high=1, version_low=0)
+        header = blocks.BlockHeader(
+            block_type=0x0400, block_length=1, version_high=1, version_low=0
+        )
         assert header.body_length == 0
 
     def test_body_length_exactly_two(self):
         """Test body_length returns 0 when block_length is exactly 2."""
-        header = blocks.BlockHeader(block_type=0x0400, block_length=2, version_high=1, version_low=0)
+        header = blocks.BlockHeader(
+            block_type=0x0400, block_length=2, version_high=1, version_low=0
+        )
         assert header.body_length == 0
 
     def test_body_length_three(self):
         """Test body_length returns 1 when block_length is 3."""
-        header = blocks.BlockHeader(block_type=0x0400, block_length=3, version_high=1, version_low=0)
+        header = blocks.BlockHeader(
+            block_type=0x0400, block_length=3, version_high=1, version_low=0
+        )
         assert header.body_length == 1
 
 
@@ -1125,24 +1187,39 @@ class TestPortInfoProperties:
     def test_link_state_up(self):
         """Test link_state property for up link."""
         port = blocks.PortInfo(
-            slot=0, subslot=0x8001, port_id="port-001",
-            mau_type=0, link_state_port=0, link_state_link=1, media_type=0,
+            slot=0,
+            subslot=0x8001,
+            port_id="port-001",
+            mau_type=0,
+            link_state_port=0,
+            link_state_link=1,
+            media_type=0,
         )
         assert port.link_state == "Up"
 
     def test_link_state_down(self):
         """Test link_state property for down link."""
         port = blocks.PortInfo(
-            slot=0, subslot=0x8001, port_id="port-001",
-            mau_type=0, link_state_port=0, link_state_link=2, media_type=0,
+            slot=0,
+            subslot=0x8001,
+            port_id="port-001",
+            mau_type=0,
+            link_state_port=0,
+            link_state_link=2,
+            media_type=0,
         )
         assert port.link_state == "Down"
 
     def test_link_state_unknown_value(self):
         """Test link_state property for unknown value."""
         port = blocks.PortInfo(
-            slot=0, subslot=0x8001, port_id="port-001",
-            mau_type=0, link_state_port=0, link_state_link=99, media_type=0,
+            slot=0,
+            subslot=0x8001,
+            port_id="port-001",
+            mau_type=0,
+            link_state_port=0,
+            link_state_link=99,
+            media_type=0,
         )
         assert "Unknown" in port.link_state
 

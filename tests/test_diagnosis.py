@@ -1,30 +1,27 @@
 """Tests for profinet.diagnosis module."""
 
-import pytest
-from struct import pack
-
 from profinet.diagnosis import (
-    # Enums
-    UserStructureIdentifier,
-    ChannelType,
-    ChannelDirection,
+    # Constants
+    CHANNEL_ERROR_TYPES,
+    EXT_CHANNEL_ERROR_TYPES_MAP,
     ChannelAccumulative,
-    ChannelSpecifier,
+    ChannelDiagnosis,
+    ChannelDirection,
     # Data classes
     ChannelProperties,
-    ChannelDiagnosis,
+    ChannelSpecifier,
+    ChannelType,
+    DiagnosisData,
     ExtChannelDiagnosis,
     QualifiedChannelDiagnosis,
-    DiagnosisData,
+    # Enums
+    UserStructureIdentifier,
     # Decoding functions
     decode_channel_error_type,
     decode_ext_channel_error_type,
     # Parsing functions
     parse_diagnosis_block,
     parse_diagnosis_simple,
-    # Constants
-    CHANNEL_ERROR_TYPES,
-    EXT_CHANNEL_ERROR_TYPES_MAP,
 )
 
 
@@ -346,18 +343,18 @@ class TestDiagnosisData:
     def test_has_maintenance_required(self):
         """Test has_maintenance_required property."""
         data = DiagnosisData()
-        data.entries.append(ChannelDiagnosis(
-            channel_properties=ChannelProperties(maintenance_required=True)
-        ))
+        data.entries.append(
+            ChannelDiagnosis(channel_properties=ChannelProperties(maintenance_required=True))
+        )
         assert data.has_maintenance_required is True
         assert data.has_maintenance_demanded is False
 
     def test_has_maintenance_demanded(self):
         """Test has_maintenance_demanded property."""
         data = DiagnosisData()
-        data.entries.append(ChannelDiagnosis(
-            channel_properties=ChannelProperties(maintenance_demanded=True)
-        ))
+        data.entries.append(
+            ChannelDiagnosis(channel_properties=ChannelProperties(maintenance_demanded=True))
+        )
         assert data.has_maintenance_required is False
         assert data.has_maintenance_demanded is True
 
@@ -583,7 +580,7 @@ class TestParseDiagnosisBlock:
             b"\x80\x01"  # ChannelErrorType = 0x8001 (Remote mismatch)
             b"\x80\x05"  # ExtChannelErrorType = 0x8005 (No peer detected)
             b"\x00\x00\x00\x01"  # ExtChannelAddValue
-            b"\xAB\xCD\xEF\x01"  # Qualifier
+            b"\xab\xcd\xef\x01"  # Qualifier
         )
         result = parse_diagnosis_block(data)
         assert len(result.entries) == 1
@@ -627,7 +624,7 @@ class TestParseDiagnosisSimple:
     def test_parse_multiple_entries(self):
         """Test parsing multiple simple entries."""
         data = (
-            b"\x00\x10\x00\x0C\x01\x00"  # Block header
+            b"\x00\x10\x00\x0c\x01\x00"  # Block header
             b"\x00\x01"  # ChannelNumber = 1
             b"\x00\x00"  # ChannelProperties
             b"\x00\x01"  # ChannelErrorType = Short circuit
@@ -667,23 +664,11 @@ class TestImportsFromModule:
     def test_import_from_profinet(self):
         """Test importing diagnosis from profinet package."""
         from profinet import (
-            DiagnosisData,
             ChannelDiagnosis,
-            ExtChannelDiagnosis,
-            QualifiedChannelDiagnosis,
-            ChannelProperties,
-            UserStructureIdentifier,
-            ChannelType,
-            ChannelDirection,
-            ChannelAccumulative,
-            ChannelSpecifier,
+            DiagnosisData,
             parse_diagnosis_block,
-            parse_diagnosis_simple,
-            decode_channel_error_type,
-            decode_ext_channel_error_type,
-            CHANNEL_ERROR_TYPES,
-            EXT_CHANNEL_ERROR_TYPES_MAP,
         )
+
         # Just verify they're importable
         assert DiagnosisData is not None
         assert ChannelDiagnosis is not None

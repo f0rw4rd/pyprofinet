@@ -2,6 +2,7 @@
 """Discover device topology (slots, subslots, ports)."""
 
 import os
+
 from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
@@ -24,7 +25,7 @@ with ProfinetDevice.discover(DEVICE, INTERFACE) as device:
 
     if topology.interface:
         iface = topology.interface
-        print(f"\n  Interface:")
+        print("\n  Interface:")
         print(f"    Chassis ID: {iface.chassis_id}")
         print(f"    MAC: {iface.mac_str}")
         print(f"    IP: {iface.ip_str}")

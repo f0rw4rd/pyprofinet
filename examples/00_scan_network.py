@@ -8,7 +8,8 @@ Run with: sudo python3 00_scan_network.py
 
 import os
 import sys
-from profinet import scan, PermissionDeniedError
+
+from profinet import PermissionDeniedError, scan
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
 

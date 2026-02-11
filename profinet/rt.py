@@ -9,27 +9,52 @@ Provides data structures for RT_CLASS_1 cyclic data exchange:
 
 Per IEC 61158-6-10:
 - RT frames use EtherType 0x8892
-- Frame IDs 0xC000-0xFBFF for RT_CLASS_1
+- Frame IDs 0x8000-0xFBFF for RT_CLASS_1
 - C_SDU contains process data + IOxS status bytes
 """
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+import construct as cs
 
 # EtherType for PROFINET RT frames
 ETHERTYPE_PROFINET = 0x8892
 
+# Pre-built ethertype bytes for frame construction
+_ETHERTYPE_PROFINET_BYTES = cs.Int16ub.build(ETHERTYPE_PROFINET)
+
+# =============================================================================
+# Construct Struct Definitions for RT Frame Parsing
+# =============================================================================
+
+# RT frame header: just the frame ID
+RTFrameIdStruct = cs.Struct(
+    "frame_id" / cs.Int16ub,
+)
+
+# RT frame trailer: cycle counter + data status + transfer status
+RTFrameTrailerStruct = cs.Struct(
+    "cycle_counter" / cs.Int16ub,
+    "data_status" / cs.Int8ub,
+    "transfer_status" / cs.Int8ub,
+)
+
+# Ethernet header ethertype at offset 12
+EtherTypeStruct = cs.Struct(
+    "ethertype" / cs.Int16ub,
+)
+
 # Frame ID ranges
-FRAME_ID_RT_CLASS_1_MIN = 0xC000
+FRAME_ID_RT_CLASS_1_MIN = 0x8000
 FRAME_ID_RT_CLASS_1_MAX = 0xFBFF
 FRAME_ID_ALARM_HIGH = 0xFC01
 FRAME_ID_ALARM_LOW = 0xFE01
 
 # IOCR types
-IOCR_TYPE_INPUT = 1   # Device -> Controller
+IOCR_TYPE_INPUT = 1  # Device -> Controller
 IOCR_TYPE_OUTPUT = 2  # Controller -> Device
 
 # RT Class values
@@ -38,18 +63,18 @@ RT_CLASS_2 = 0x02  # Hardware scheduled (reserved)
 RT_CLASS_3 = 0x03  # IRT (isochronous, hardware only)
 
 # DataStatus bit definitions
-DATA_STATUS_STATE = 0x01      # 0=Backup, 1=Primary
+DATA_STATUS_STATE = 0x01  # 0=Backup, 1=Primary
 DATA_STATUS_REDUNDANCY = 0x02  # Redundancy state
-DATA_STATUS_VALID = 0x04      # 0=Invalid, 1=Valid
+DATA_STATUS_VALID = 0x04  # 0=Invalid, 1=Valid
 DATA_STATUS_RESERVED = 0x08
 DATA_STATUS_PROVIDER_RUN = 0x10  # 0=Stop, 1=Run
-DATA_STATUS_STATION_OK = 0x20    # 0=Problem, 1=OK
-DATA_STATUS_IGNORE = 0x80        # 1=Ignore frame
+DATA_STATUS_STATION_OK = 0x20  # 0=Problem, 1=OK
+DATA_STATUS_IGNORE = 0x80  # 1=Ignore frame
 
 # IOxS (Provider/Consumer Status) values
-IOXS_GOOD = 0x80              # Good data, subslot level
-IOXS_BAD = 0x00               # Bad data
-IOXS_EXTENSION = 0x01         # More IOxS follows
+IOXS_GOOD = 0x80  # Good data, subslot level
+IOXS_BAD = 0x00  # Bad data
+IOXS_EXTENSION = 0x01  # More IOxS follows
 
 
 @dataclass
@@ -93,7 +118,7 @@ class IOCRConfig:
     """Local IOCR reference number."""
 
     frame_id: int
-    """Assigned Frame ID (0xC000-0xFBFF for RT_CLASS_1)."""
+    """Assigned Frame ID (0x8000-0xFBFF for RT_CLASS_1)."""
 
     send_clock_factor: int = 32
     """Base clock multiplier (32 = 1ms base)."""
@@ -171,7 +196,7 @@ class RTFrame:
     """
 
     frame_id: int
-    """Frame ID identifying the IOCR (0xC000-0xFBFF for RT_CLASS_1)."""
+    """Frame ID identifying the IOCR (0x8000-0xFBFF for RT_CLASS_1)."""
 
     cycle_counter: int
     """16-bit cycle counter, increments each cycle."""
@@ -207,20 +232,15 @@ class RTFrame:
         if len(data) < 6:
             raise ValueError(f"RT frame too short: {len(data)} bytes")
 
-        frame_id = struct.unpack(">H", data[0:2])[0]
-
-        # Payload is variable, ends with 4 bytes: cycle(2) + status(2)
-        payload = data[2:-4]
-        cycle_counter = struct.unpack(">H", data[-4:-2])[0]
-        data_status = data[-2]
-        transfer_status = data[-1]
+        header = RTFrameIdStruct.parse(data[:2])
+        trailer = RTFrameTrailerStruct.parse(data[-4:])
 
         return cls(
-            frame_id=frame_id,
-            cycle_counter=cycle_counter,
-            data_status=data_status,
-            transfer_status=transfer_status,
-            payload=payload,
+            frame_id=header.frame_id,
+            cycle_counter=trailer.cycle_counter,
+            data_status=trailer.data_status,
+            transfer_status=trailer.transfer_status,
+            payload=data[2:-4],
         )
 
     def to_bytes(self) -> bytes:
@@ -230,10 +250,15 @@ class RTFrame:
             Serialized frame (Frame ID + payload + cycle + status)
         """
         return (
-            struct.pack(">H", self.frame_id)
+            RTFrameIdStruct.build({"frame_id": self.frame_id})
             + self.payload
-            + struct.pack(">H", self.cycle_counter)
-            + bytes([self.data_status, self.transfer_status])
+            + RTFrameTrailerStruct.build(
+                {
+                    "cycle_counter": self.cycle_counter,
+                    "data_status": self.data_status,
+                    "transfer_status": self.transfer_status,
+                }
+            )
         )
 
     @property
@@ -318,7 +343,7 @@ class CyclicDataBuilder:
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
                 end = obj.frame_offset + min(len(data), obj.data_length)
-                self._buffer[obj.frame_offset:end] = data[: obj.data_length]
+                self._buffer[obj.frame_offset : end] = data[: obj.data_length]
                 return
         raise ValueError(f"Unknown slot/subslot: {slot}/{subslot}")
 
@@ -337,9 +362,7 @@ class CyclicDataBuilder:
         """
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
-                return bytes(
-                    self._buffer[obj.frame_offset : obj.frame_offset + obj.data_length]
-                )
+                return bytes(self._buffer[obj.frame_offset : obj.frame_offset + obj.data_length])
         raise ValueError(f"Unknown slot/subslot: {slot}/{subslot}")
 
     def set_iops(self, slot: int, subslot: int, status: int = IOXS_GOOD) -> None:
@@ -416,12 +439,7 @@ def build_ethernet_frame(
     Returns:
         Complete Ethernet frame bytes
     """
-    return (
-        dst_mac
-        + src_mac
-        + struct.pack(">H", ETHERTYPE_PROFINET)
-        + rt_frame.to_bytes()
-    )
+    return dst_mac + src_mac + _ETHERTYPE_PROFINET_BYTES + rt_frame.to_bytes()
 
 
 def parse_ethernet_frame(data: bytes) -> Optional[RTFrame]:
@@ -436,8 +454,8 @@ def parse_ethernet_frame(data: bytes) -> Optional[RTFrame]:
     if len(data) < 18:  # 14 (eth) + 4 (min RT)
         return None
 
-    ethertype = struct.unpack(">H", data[12:14])[0]
-    if ethertype != ETHERTYPE_PROFINET:
+    parsed_eth = EtherTypeStruct.parse(data[12:14])
+    if parsed_eth.ethertype != ETHERTYPE_PROFINET:
         return None
 
     try:

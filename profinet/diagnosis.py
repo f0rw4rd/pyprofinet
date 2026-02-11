@@ -18,18 +18,72 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import IntEnum
-from struct import unpack
 from typing import Dict, List
 
+import construct as cs
+
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Construct Struct Definitions for Diagnosis Parsing
+# =============================================================================
+
+# Block header for diagnosis blocks (BlockType + BlockLength)
+DiagBlockHeaderStruct = cs.Struct(
+    "block_type" / cs.Int16ub,
+    "block_length" / cs.Int16ub,
+)
+
+# API / Slot / Subslot location header
+ApiSlotSubslotStruct = cs.Struct(
+    "api" / cs.Int32ub,
+    "slot" / cs.Int16ub,
+    "subslot" / cs.Int16ub,
+)
+
+# Common channel header: ChannelNumber + ChannelProperties + USI
+ChannelHeaderStruct = cs.Struct(
+    "channel_number" / cs.Int16ub,
+    "channel_properties" / cs.Int16ub,
+    "usi" / cs.Int16ub,
+)
+
+# ChannelDiagnosis body (USI 0x8000): just ChannelErrorType
+ChannelDiagBodyStruct = cs.Struct(
+    "error_type" / cs.Int16ub,
+)
+
+# ExtChannelDiagnosis body (USI 0x8002): ChannelErrorType + ExtChannelErrorType + ExtChannelAddValue
+ExtChannelDiagBodyStruct = cs.Struct(
+    "error_type" / cs.Int16ub,
+    "ext_error_type" / cs.Int16ub,
+    "ext_add_value" / cs.Int32ub,
+)
+
+# QualifiedChannelDiagnosis body (USI 0x8003): same as Ext + QualifiedChannelQualifier
+QualifiedChannelDiagBodyStruct = cs.Struct(
+    "error_type" / cs.Int16ub,
+    "ext_error_type" / cs.Int16ub,
+    "ext_add_value" / cs.Int32ub,
+    "qualifier" / cs.Int32ub,
+)
+
+# Simple diagnosis entry: ChannelNumber + ChannelProperties + ChannelErrorType
+SimpleDiagEntryStruct = cs.Struct(
+    "channel_number" / cs.Int16ub,
+    "channel_properties" / cs.Int16ub,
+    "error_type" / cs.Int16ub,
+)
 
 
 # =============================================================================
 # User Structure Identifiers
 # =============================================================================
 
+
 class UserStructureIdentifier(IntEnum):
     """USI values define the diagnosis type."""
+
     CHANNEL_DIAGNOSIS = 0x8000
     MULTIPLE = 0x8001
     EXT_CHANNEL_DIAGNOSIS = 0x8002
@@ -45,16 +99,19 @@ class UserStructureIdentifier(IntEnum):
 # Channel Properties Bit Fields
 # =============================================================================
 
+
 class ChannelType(IntEnum):
     """Channel type from ChannelProperties bits 0-1."""
+
     RESERVED = 0
-    SPECIFIC = 1      # Specific channel
-    ALL = 2           # All channels (submodule)
-    SUBMODULE = 3     # Whole submodule
+    SPECIFIC = 1  # Specific channel
+    ALL = 2  # All channels (submodule)
+    SUBMODULE = 3  # Whole submodule
 
 
 class ChannelDirection(IntEnum):
     """Channel direction from ChannelProperties bits 11-12."""
+
     MANUFACTURER = 0  # Manufacturer-specific
     INPUT = 1
     OUTPUT = 2
@@ -63,18 +120,20 @@ class ChannelDirection(IntEnum):
 
 class ChannelAccumulative(IntEnum):
     """Accumulative info from ChannelProperties bits 2-4."""
+
     NO = 0
-    MAIN_FAULT = 1       # Main diagnosis (main fault)
+    MAIN_FAULT = 1  # Main diagnosis (main fault)
     ADDITIONAL_FAULT = 2  # Additional diagnosis
     # 3-7: Reserved
 
 
 class ChannelSpecifier(IntEnum):
     """Specifier from ChannelProperties bits 8-10."""
-    ALL_DISAPPEARS = 0     # All diagnosis of submodule disappears
-    APPEARS = 1            # Diagnosis appears
-    DISAPPEARS = 2         # Diagnosis disappears
-    DISAPPEARS_OTHER = 3   # Diagnosis disappears, others remain
+
+    ALL_DISAPPEARS = 0  # All diagnosis of submodule disappears
+    APPEARS = 1  # Diagnosis appears
+    DISAPPEARS = 2  # Diagnosis disappears
+    DISAPPEARS_OTHER = 3  # Diagnosis disappears, others remain
     # 4-7: Reserved
 
 
@@ -118,7 +177,6 @@ CHANNEL_ERROR_TYPES: Dict[int, str] = {
     0x001F: "Temporary fault",
     # 0x0020 - 0x00FF: Reserved
     # 0x0100 - 0x7FFF: Manufacturer-specific
-
     # Network/system level errors (0x8000+)
     0x8000: "Data transmission impossible",
     0x8001: "Remote mismatch",
@@ -136,7 +194,6 @@ CHANNEL_ERROR_TYPES: Dict[int, str] = {
     0x800D: "Multiple interface mismatch",
     # 0x800E - 0x8FFF: Reserved
     # 0x9000 - 0x9FFF: Reserved for profiles
-
     # IO-Link (0x9500+)
     0x9500: "IO-Link device event",
     0x9501: "IO-Link device event (MSB cleared)",
@@ -253,9 +310,11 @@ EXT_CHANNEL_ERROR_TYPES_MAP: Dict[int, Dict[int, str]] = {
 # Diagnosis Data Classes
 # =============================================================================
 
+
 @dataclass
 class ChannelProperties:
     """Parsed ChannelProperties bit field (16 bits)."""
+
     raw: int = 0
     channel_type: ChannelType = ChannelType.RESERVED
     accumulative: ChannelAccumulative = ChannelAccumulative.NO
@@ -307,6 +366,7 @@ class ChannelDiagnosis:
 
     Structure: ChannelNumber(2) + ChannelProperties(2) + ChannelErrorType(2)
     """
+
     api: int = 0
     slot: int = 0
     subslot: int = 0
@@ -328,6 +388,7 @@ class ExtChannelDiagnosis(ChannelDiagnosis):
     Structure: ChannelNumber(2) + ChannelProperties(2) + ChannelErrorType(2)
                + ExtChannelErrorType(2) + ExtChannelAddValue(4)
     """
+
     ext_error_type: int = 0
     ext_error_type_name: str = ""
     ext_add_value: int = 0
@@ -339,12 +400,14 @@ class QualifiedChannelDiagnosis(ExtChannelDiagnosis):
 
     Structure: Same as ExtChannelDiagnosis + QualifiedChannelQualifier(4)
     """
+
     qualifier: int = 0
 
 
 @dataclass
 class DiagnosisData:
     """Complete diagnosis data from a device."""
+
     api: int = 0
     slot: int = 0
     subslot: int = 0
@@ -374,6 +437,7 @@ class DiagnosisData:
 # =============================================================================
 # Decoding Functions
 # =============================================================================
+
 
 def decode_channel_error_type(error_type: int) -> str:
     """Decode ChannelErrorType to human-readable string."""
@@ -416,6 +480,7 @@ def decode_ext_channel_error_type(channel_error_type: int, ext_error_type: int) 
 # Parsing Functions
 # =============================================================================
 
+
 def parse_diagnosis_block(
     data: bytes,
     api: int = 0,
@@ -443,10 +508,9 @@ def parse_diagnosis_block(
     # Skip block header if present (BlockType + BlockLength + BlockVersionHigh/Low)
     # BlockType is 2 bytes, BlockLength is 2 bytes, version is 2 bytes
     if len(data) >= 4:
-        block_type = unpack(">H", data[0:2])[0]
-        _block_len = unpack(">H", data[2:4])[0]
+        hdr = DiagBlockHeaderStruct.parse(data[0:4])
         # Check if this looks like a block header
-        if block_type in (0x0010, 0x0011, 0x0012, 0x8010, 0x8011, 0x8012):
+        if hdr.block_type in (0x0010, 0x0011, 0x8010, 0x8011, 0x8012):
             offset = 6  # Skip header
 
     # Parse diagnosis entries
@@ -457,44 +521,30 @@ def parse_diagnosis_block(
         # First check if we have API/Slot/Subslot header (8 bytes)
         if offset + 8 <= len(data):
             # Try parsing as: API(4) + SlotNumber(2) + SubslotNumber(2)
-            possible_api = unpack(">I", data[offset:offset + 4])[0]
-            possible_slot = unpack(">H", data[offset + 4:offset + 6])[0]
-            possible_subslot = unpack(">H", data[offset + 6:offset + 8])[0]
+            location = ApiSlotSubslotStruct.parse(data[offset : offset + 8])
 
             # Sanity check - API should be small, slot < 0x8000
-            if possible_api < 0x10000 and possible_slot < 0x8000:
-                api = possible_api
-                slot = possible_slot
-                subslot = possible_subslot
+            if location.api < 0x10000 and location.slot < 0x8000:
+                api = location.api
+                slot = location.slot
+                subslot = location.subslot
                 offset += 8
 
-        if offset + 2 > len(data):
+        if offset + 6 > len(data):
             break
 
-        # Read ChannelNumber
-        channel_num = unpack(">H", data[offset:offset + 2])[0]
-        offset += 2
-
-        if offset + 2 > len(data):
-            break
-
-        # Read ChannelProperties
-        channel_props_raw = unpack(">H", data[offset:offset + 2])[0]
-        channel_props = ChannelProperties.from_uint16(channel_props_raw)
-        offset += 2
-
-        if offset + 2 > len(data):
-            break
-
-        # Read UserStructureIdentifier
-        usi = unpack(">H", data[offset:offset + 2])[0]
-        offset += 2
+        # Read ChannelNumber + ChannelProperties + UserStructureIdentifier
+        ch_hdr = ChannelHeaderStruct.parse(data[offset : offset + 6])
+        channel_num = ch_hdr.channel_number
+        channel_props = ChannelProperties.from_uint16(ch_hdr.channel_properties)
+        usi = ch_hdr.usi
+        offset += 6
 
         if usi == UserStructureIdentifier.CHANNEL_DIAGNOSIS:
             # ChannelDiagnosis: ChannelErrorType(2)
             if offset + 2 > len(data):
                 break
-            error_type = unpack(">H", data[offset:offset + 2])[0]
+            body = ChannelDiagBodyStruct.parse(data[offset : offset + 2])
             offset += 2
 
             entry = ChannelDiagnosis(
@@ -503,8 +553,8 @@ def parse_diagnosis_block(
                 subslot=subslot,
                 channel_number=channel_num,
                 channel_properties=channel_props,
-                error_type=error_type,
-                error_type_name=decode_channel_error_type(error_type),
+                error_type=body.error_type,
+                error_type_name=decode_channel_error_type(body.error_type),
             )
             result.entries.append(entry)
 
@@ -512,9 +562,7 @@ def parse_diagnosis_block(
             # ExtChannelDiagnosis: ChannelErrorType(2) + ExtChannelErrorType(2) + ExtChannelAddValue(4)
             if offset + 8 > len(data):
                 break
-            error_type = unpack(">H", data[offset:offset + 2])[0]
-            ext_error_type = unpack(">H", data[offset + 2:offset + 4])[0]
-            ext_add_value = unpack(">I", data[offset + 4:offset + 8])[0]
+            body = ExtChannelDiagBodyStruct.parse(data[offset : offset + 8])
             offset += 8
 
             entry = ExtChannelDiagnosis(
@@ -523,11 +571,13 @@ def parse_diagnosis_block(
                 subslot=subslot,
                 channel_number=channel_num,
                 channel_properties=channel_props,
-                error_type=error_type,
-                error_type_name=decode_channel_error_type(error_type),
-                ext_error_type=ext_error_type,
-                ext_error_type_name=decode_ext_channel_error_type(error_type, ext_error_type),
-                ext_add_value=ext_add_value,
+                error_type=body.error_type,
+                error_type_name=decode_channel_error_type(body.error_type),
+                ext_error_type=body.ext_error_type,
+                ext_error_type_name=decode_ext_channel_error_type(
+                    body.error_type, body.ext_error_type
+                ),
+                ext_add_value=body.ext_add_value,
             )
             result.entries.append(entry)
 
@@ -535,10 +585,7 @@ def parse_diagnosis_block(
             # QualifiedChannelDiagnosis: same as Ext + Qualifier(4)
             if offset + 12 > len(data):
                 break
-            error_type = unpack(">H", data[offset:offset + 2])[0]
-            ext_error_type = unpack(">H", data[offset + 2:offset + 4])[0]
-            ext_add_value = unpack(">I", data[offset + 4:offset + 8])[0]
-            qualifier = unpack(">I", data[offset + 8:offset + 12])[0]
+            body = QualifiedChannelDiagBodyStruct.parse(data[offset : offset + 12])
             offset += 12
 
             entry = QualifiedChannelDiagnosis(
@@ -547,19 +594,21 @@ def parse_diagnosis_block(
                 subslot=subslot,
                 channel_number=channel_num,
                 channel_properties=channel_props,
-                error_type=error_type,
-                error_type_name=decode_channel_error_type(error_type),
-                ext_error_type=ext_error_type,
-                ext_error_type_name=decode_ext_channel_error_type(error_type, ext_error_type),
-                ext_add_value=ext_add_value,
-                qualifier=qualifier,
+                error_type=body.error_type,
+                error_type_name=decode_channel_error_type(body.error_type),
+                ext_error_type=body.ext_error_type,
+                ext_error_type_name=decode_ext_channel_error_type(
+                    body.error_type, body.ext_error_type
+                ),
+                ext_add_value=body.ext_add_value,
+                qualifier=body.qualifier,
             )
             result.entries.append(entry)
 
         else:
             # Unknown USI - try to create basic entry from what we have
             if offset + 2 <= len(data):
-                error_type = unpack(">H", data[offset:offset + 2])[0]
+                body = ChannelDiagBodyStruct.parse(data[offset : offset + 2])
                 offset += 2
 
                 entry = ChannelDiagnosis(
@@ -568,8 +617,8 @@ def parse_diagnosis_block(
                     subslot=subslot,
                     channel_number=channel_num,
                     channel_properties=channel_props,
-                    error_type=error_type,
-                    error_type_name=decode_channel_error_type(error_type),
+                    error_type=body.error_type,
+                    error_type_name=decode_channel_error_type(body.error_type),
                 )
                 result.entries.append(entry)
             else:
@@ -610,9 +659,10 @@ def parse_diagnosis_simple(
     # Parse all ChannelDiagnosis entries (simple format)
     # Each entry: ChannelNumber(2) + ChannelProperties(2) + ChannelErrorType(2)
     while offset + 6 <= len(data):
-        channel_num = unpack(">H", data[offset:offset + 2])[0]
-        channel_props_raw = unpack(">H", data[offset + 2:offset + 4])[0]
-        error_type = unpack(">H", data[offset + 4:offset + 6])[0]
+        entry_data = SimpleDiagEntryStruct.parse(data[offset : offset + 6])
+        channel_num = entry_data.channel_number
+        channel_props_raw = entry_data.channel_properties
+        error_type = entry_data.error_type
         offset += 6
 
         # Sanity check

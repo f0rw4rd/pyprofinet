@@ -12,8 +12,8 @@ Environment variables:
 
 import os
 import subprocess
-import pytest
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Expected device properties from the p-net mock device GSDML header
@@ -26,8 +26,8 @@ EXPECTED_OEM_VENDOR_ID = 0xCAFE
 EXPECTED_OEM_DEVICE_ID = 0xEE02
 EXPECTED_HW_REVISION = 1
 EXPECTED_SW_REVISION_PREFIX = ord("V")
-EXPECTED_SW_REVISION_MAJOR = 1
-EXPECTED_SW_REVISION_MINOR = 0
+EXPECTED_SW_REVISION_MAJOR = 0
+EXPECTED_SW_REVISION_MINOR = 2
 EXPECTED_SERIAL_NUMBER = "PNMOCK-001"
 EXPECTED_ORDER_ID = "PNMOCK-DEV-001"
 EXPECTED_PRODUCT_NAME = "PROFINET Mock IO Device"
@@ -42,6 +42,7 @@ EXPECTED_PROFILE_SPEC_TYPE = 0x5678
 # ---------------------------------------------------------------------------
 # Skip conditions
 # ---------------------------------------------------------------------------
+
 
 def _is_root() -> bool:
     """Check if running as root or with CAP_NET_RAW."""
@@ -89,6 +90,7 @@ skip_no_container = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def interface() -> str:

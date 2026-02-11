@@ -1,26 +1,27 @@
 """Tests for RPC module - data classes and parsing."""
 
-import pytest
-from unittest.mock import MagicMock, patch
-from struct import pack
-
 import sys
-sys.path.insert(0, '.')
+from struct import pack
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+sys.path.insert(0, ".")
+
+from profinet.dcp import DCPDeviceDescription
+from profinet.protocol import PNDCPBlock
 from profinet.rpc import (
-    PortStatistics,
-    LinkData,
-    PortInfo,
-    InterfaceInfo,
-    DiagnosisEntry,
-    ARInfo,
-    LogEntry,
     MAU_TYPES,
+    ARInfo,
+    DiagnosisEntry,
+    InterfaceInfo,
+    LinkData,
+    LogEntry,
+    PortInfo,
+    PortStatistics,
     RPCCon,
     get_station_info,
 )
-from profinet.dcp import DCPDeviceDescription
-from profinet.protocol import PNDCPBlock
 
 
 class TestDataClasses:
@@ -36,11 +37,7 @@ class TestDataClasses:
         assert stats.ifOutErrors == 0
 
     def test_port_statistics_values(self):
-        stats = PortStatistics(
-            ifInOctets=1000,
-            ifOutOctets=2000,
-            ifInErrors=5
-        )
+        stats = PortStatistics(ifInOctets=1000, ifOutOctets=2000, ifInErrors=5)
         assert stats.ifInOctets == 1000
         assert stats.ifOutOctets == 2000
         assert stats.ifInErrors == 5
@@ -53,12 +50,7 @@ class TestDataClasses:
         assert link.mau_type_name == "unknown"
 
     def test_link_data_values(self):
-        link = LinkData(
-            link_state="up",
-            link_speed=100,
-            mau_type=16,
-            mau_type_name="100BASE-TX FD"
-        )
+        link = LinkData(link_state="up", link_speed=100, mau_type=16, mau_type_name="100BASE-TX FD")
         assert link.link_state == "up"
         assert link.mau_type == 16
 
@@ -77,7 +69,7 @@ class TestDataClasses:
             subslot=0x8001,
             port_id="port-001",
             peer_port_id="port-002",
-            peer_chassis_id="device2"
+            peer_chassis_id="device2",
         )
         assert port.slot == 1
         assert port.subslot == 0x8001
@@ -97,7 +89,7 @@ class TestDataClasses:
             mac="aa:bb:cc:dd:ee:ff",
             ip="192.168.1.100",
             netmask="255.255.255.0",
-            gateway="192.168.1.1"
+            gateway="192.168.1.1",
         )
         assert info.chassis_id == "plc-001"
         assert info.ip == "192.168.1.100"
@@ -155,7 +147,7 @@ class TestRPCConInit:
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
 
-        with patch('profinet.rpc.socket') as mock_socket:
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             assert rpc.info == info
             assert rpc.peer == ("192.168.1.100", 0x8894)
@@ -170,7 +162,7 @@ class TestRPCConInit:
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
 
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             with RPCCon(info) as rpc:
                 assert rpc.info == info
 
@@ -203,7 +195,7 @@ class TestTopologyParsing:
 
         block = pack(">HH", 0x0240, len(content) + 2) + bytes([0x01, 0x00]) + content
 
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
 
             # Mock the read method
@@ -228,7 +220,7 @@ class TestRecordEnumeration:
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
 
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
 
             # Mock read to return data for some indices
@@ -237,7 +229,7 @@ class TestRecordEnumeration:
                 if idx in [0xAFF0, 0xF000]:
                     mock.payload = bytes([0] * 60)
                 else:
-                    mock.payload = bytes()
+                    mock.payload = b""
                 return mock
 
             rpc.read = mock_read
@@ -259,7 +251,7 @@ class TestIMReading:
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             yield rpc
             rpc.close()
@@ -279,7 +271,19 @@ class TestIMReading:
         profile_type = pack(">H", 0x0001)
         im_version = bytes([0x01, 0x00])  # version 1.0
         im_supported = pack(">H", 0x000E)  # supports IM0-3
-        return header + vendor_id + order_id + serial + hw_rev + sw_rev + revision_counter + profile_id + profile_type + im_version + im_supported
+        return (
+            header
+            + vendor_id
+            + order_id
+            + serial
+            + hw_rev
+            + sw_rev
+            + revision_counter
+            + profile_id
+            + profile_type
+            + im_version
+            + im_supported
+        )
 
     def _create_im1_payload(self):
         """Create valid I&M1 payload for testing."""
@@ -354,6 +358,7 @@ class TestIMReading:
         mock_iod.payload = im0_payload
 
         from profinet.exceptions import RPCError
+
         call_count = [0]
 
         def mock_read(api, slot, subslot, idx):
@@ -381,7 +386,7 @@ class TestPortMethods:
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             yield rpc
             rpc.close()
@@ -431,7 +436,7 @@ class TestPortMethods:
         # IP, netmask, gateway
         content += bytes([192, 168, 1, 100])  # IP
         content += bytes([255, 255, 255, 0])  # netmask
-        content += bytes([192, 168, 1, 1])    # gateway
+        content += bytes([192, 168, 1, 1])  # gateway
 
         payload = header + content
 
@@ -477,7 +482,7 @@ class TestDiagnosticMethods:
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             yield rpc
             rpc.close()
@@ -485,6 +490,7 @@ class TestDiagnosticMethods:
     def test_read_diagnosis_returns_diagnosis_data(self, mock_rpc):
         """Test read_diagnosis returns DiagnosisData object."""
         from profinet.diagnosis import DiagnosisData
+
         header = pack(">HH", 0xF000, 20) + bytes([0x01, 0x00])
         payload = header + bytes(14)
 
@@ -498,8 +504,9 @@ class TestDiagnosticMethods:
 
     def test_read_diagnosis_error_returns_empty_diagnosis_data(self, mock_rpc):
         """Test read_diagnosis returns empty DiagnosisData on error."""
-        from profinet.exceptions import RPCError
         from profinet.diagnosis import DiagnosisData
+        from profinet.exceptions import RPCError
+
         mock_rpc.read = MagicMock(side_effect=RPCError("Not available"))
 
         result = mock_rpc.read_diagnosis()
@@ -527,6 +534,7 @@ class TestDiagnosticMethods:
     def test_read_logbook_error_returns_empty(self, mock_rpc):
         """Test read_logbook returns empty list on error."""
         from profinet.exceptions import RPCError
+
         mock_rpc.read = MagicMock(side_effect=RPCError("Not available"))
 
         entries = mock_rpc.read_logbook()
@@ -553,6 +561,7 @@ class TestDiagnosticMethods:
     def test_read_ar_info_error_returns_none(self, mock_rpc):
         """Test read_ar_info returns None on error."""
         from profinet.exceptions import RPCError
+
         mock_rpc.read = MagicMock(side_effect=RPCError("Not available"))
 
         ar = mock_rpc.read_ar_info()
@@ -571,7 +580,7 @@ class TestRawMethods:
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             yield rpc
             rpc.close()
@@ -608,7 +617,7 @@ class TestErrorHandling:
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
         info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
-        with patch('profinet.rpc.socket'):
+        with patch("profinet.rpc.socket"):
             rpc = RPCCon(info)
             yield rpc
             rpc.close()
@@ -620,9 +629,10 @@ class TestErrorHandling:
 
     def test_connect_accepts_src_mac(self, mock_rpc):
         """Test connect accepts src_mac parameter."""
+
         from profinet.exceptions import RPCConnectionError
-        from socket import timeout as SocketTimeout
-        mock_rpc._socket.recvfrom = MagicMock(side_effect=SocketTimeout())
+
+        mock_rpc._socket.recvfrom = MagicMock(side_effect=TimeoutError())
 
         with pytest.raises(RPCConnectionError):
             mock_rpc.connect(src_mac=b"\x00\x11\x22\x33\x44\x55")
@@ -637,41 +647,41 @@ class TestGetStationInfo:
 
         mock_sock = MagicMock()
 
-        with patch('profinet.rpc.dcp.send_request'):
-            with patch('profinet.rpc.dcp.read_response', return_value={}):
+        with patch("profinet.rpc.dcp.send_request"):
+            with patch("profinet.rpc.dcp.read_response", return_value={}):
                 with pytest.raises(DCPDeviceNotFoundError, match="not found"):
                     get_station_info(mock_sock, b"\x00\x11\x22\x33\x44\x55", "unknown-device")
 
     def test_get_station_info_found(self):
         """Test get_station_info returns device description."""
         mock_sock = MagicMock()
-        mock_mac = b"\xAA\xBB\xCC\xDD\xEE\xFF"
+        mock_mac = b"\xaa\xbb\xcc\xdd\xee\xff"
         mock_blocks = {
             PNDCPBlock.NAME_OF_STATION: b"found-device",
             PNDCPBlock.IP_ADDRESS: bytes([192, 168, 1, 100, 255, 255, 255, 0, 192, 168, 1, 1]),
             PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
         }
 
-        with patch('profinet.rpc.dcp.send_request'):
-            with patch('profinet.rpc.dcp.read_response', return_value={mock_mac: mock_blocks}):
+        with patch("profinet.rpc.dcp.send_request"):
+            with patch("profinet.rpc.dcp.read_response", return_value={mock_mac: mock_blocks}):
                 info = get_station_info(mock_sock, b"\x00\x11\x22\x33\x44\x55", "found-device")
                 assert info.name == "found-device"
                 assert info.ip == "192.168.1.100"
 
 
 from profinet.rpc import (
-    RPC_PORT,
-    RPC_BIND_PORT,
-    UUID_NULL,
-    UUID_EPM_V4,
-    UUID_PNIO_DEVICE,
-    UUID_PNIO_CONTROLLER,
     PNIO_DEVICE_INTERFACE_VERSION,
+    RPC_BIND_PORT,
+    RPC_PORT,
+    UUID_EPM_V4,
+    UUID_NULL,
+    UUID_PNIO_CONTROLLER,
+    UUID_PNIO_DEVICE,
     EPMEndpoint,
-    epm_lookup,
-    _uuid_bytes_to_string,
-    _string_to_uuid_bytes,
     _parse_epm_tower,
+    _string_to_uuid_bytes,
+    _uuid_bytes_to_string,
+    epm_lookup,
 )
 
 
@@ -721,26 +731,31 @@ class TestRPCConstantsExport:
     def test_rpc_port_importable_from_package(self):
         """Test RPC_PORT can be imported from profinet package."""
         from profinet import RPC_PORT
+
         assert RPC_PORT == 0x8894
 
     def test_rpc_bind_port_importable_from_package(self):
         """Test RPC_BIND_PORT can be imported from profinet package."""
         from profinet import RPC_BIND_PORT
+
         assert RPC_BIND_PORT == 0x8895
 
     def test_uuid_epm_v4_importable_from_package(self):
         """Test UUID_EPM_V4 can be imported from profinet package."""
         from profinet import UUID_EPM_V4
+
         assert UUID_EPM_V4 == "e1af8308-5d1f-11c9-91a4-08002b14a0fa"
 
     def test_uuid_pnio_device_importable_from_package(self):
         """Test UUID_PNIO_DEVICE can be imported from profinet package."""
         from profinet import UUID_PNIO_DEVICE
+
         assert UUID_PNIO_DEVICE == "dea00001-6c97-11d1-8271-00a02442df7d"
 
     def test_uuid_pnio_controller_importable_from_package(self):
         """Test UUID_PNIO_CONTROLLER can be imported from profinet package."""
         from profinet import UUID_PNIO_CONTROLLER
+
         assert UUID_PNIO_CONTROLLER == "dea00002-6c97-11d1-8271-00a02442df7d"
 
 
@@ -768,7 +783,7 @@ class TestEPMEndpoint:
             protocol="ncadg_ip_udp",
             port=34964,
             address="192.168.1.100",
-            annotation="S7-1500 6ES7 672-5DC01-0YA0"
+            annotation="S7-1500 6ES7 672-5DC01-0YA0",
         )
         assert ep.interface_uuid == UUID_PNIO_DEVICE
         assert ep.port == 34964
@@ -801,13 +816,26 @@ class TestUUIDConversion:
     def test_uuid_bytes_to_string_pnio_device(self):
         """Test converting PNIO Device UUID bytes to string."""
         # PNIO Device UUID in DCE/RPC format (mixed-endian)
-        uuid_bytes = bytes([
-            0x01, 0x00, 0xA0, 0xDE,  # time_low (LE)
-            0x97, 0x6C,              # time_mid (LE)
-            0xD1, 0x11,              # time_hi (LE)
-            0x82, 0x71,              # clock_seq (BE)
-            0x00, 0xA0, 0x24, 0x42, 0xDF, 0x7D  # node (BE)
-        ])
+        uuid_bytes = bytes(
+            [
+                0x01,
+                0x00,
+                0xA0,
+                0xDE,  # time_low (LE)
+                0x97,
+                0x6C,  # time_mid (LE)
+                0xD1,
+                0x11,  # time_hi (LE)
+                0x82,
+                0x71,  # clock_seq (BE)
+                0x00,
+                0xA0,
+                0x24,
+                0x42,
+                0xDF,
+                0x7D,  # node (BE)
+            ]
+        )
         result = _uuid_bytes_to_string(uuid_bytes)
         assert result == "dea00001-6c97-11d1-8271-00a02442df7d"
 
@@ -860,7 +888,7 @@ class TestParseEPMTower:
 
     def test_parse_empty_tower(self):
         """Test parsing empty tower returns None."""
-        result = _parse_epm_tower(bytes())
+        result = _parse_epm_tower(b"")
         assert result is None
 
     def test_parse_short_tower(self):
@@ -925,10 +953,12 @@ class TestEPMLookup:
     def test_epm_lookup_importable(self):
         """Test epm_lookup is importable from package."""
         from profinet import epm_lookup as epm_func
+
         assert callable(epm_func)
 
     def test_epm_endpoint_importable(self):
         """Test EPMEndpoint is importable from package."""
         from profinet import EPMEndpoint as EPMClass
+
         ep = EPMClass()
         assert ep.port == 0

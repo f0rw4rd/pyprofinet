@@ -1,15 +1,16 @@
 """Tests for profinet.util module."""
 
 import pytest
+
+from profinet.exceptions import InvalidIPError, InvalidMACError
 from profinet.util import (
-    s2mac,
+    decode_bytes,
+    ip2s,
     mac2s,
     s2ip,
-    ip2s,
+    s2mac,
     to_hex,
-    decode_bytes,
 )
-from profinet.exceptions import InvalidMACError, InvalidIPError
 
 
 class TestMACConversion:
@@ -169,6 +170,7 @@ class TestHelperFunctions:
 
 import struct
 import time
+
 from profinet.util import MaxTimeout, max_timeout
 
 
@@ -220,8 +222,7 @@ class TestMaxTimeout:
 # make_packet VLF Tests
 # =============================================================================
 
-from profinet.util import make_packet
-from profinet.protocol import PNDCPBlockRequest, PNDCPBlock, PNBlockHeader
+from profinet.protocol import PNBlockHeader, PNDCPBlock, PNDCPBlockRequest
 
 
 class TestMakePacketVLF:

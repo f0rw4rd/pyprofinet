@@ -7,14 +7,15 @@ Run with: sudo python3 12_dcp_discovery.py
 """
 
 import os
+
 from profinet import (
+    DCPDeviceDescription,
+    PermissionDeniedError,
     ethernet_socket,
     get_mac,
-    send_discover,
-    read_response,
-    DCPDeviceDescription,
     get_vendor_name,
-    PermissionDeniedError,
+    read_response,
+    send_discover,
 )
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")

@@ -26,23 +26,21 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from profinet import (
-    RPCCon,
-    IOSlot,
     IOCRSetup,
-    ConnectResult,
+    IOSlot,
+    RPCCon,
     ethernet_socket,
-    send_discover,
-    read_response,
     get_mac,
-)
-from profinet.rt import (
-    IOCRConfig,
-    IODataObject,
-    CyclicDataBuilder,
-    IOCR_TYPE_INPUT,
-    IOCR_TYPE_OUTPUT,
+    read_response,
+    send_discover,
 )
 from profinet.cyclic import CyclicController
+from profinet.rt import (
+    IOCR_TYPE_INPUT,
+    IOCR_TYPE_OUTPUT,
+    IOCRConfig,
+    IODataObject,
+)
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
 DEVICE = os.environ.get("PROFINET_DEVICE", "")
@@ -198,7 +196,7 @@ def main():
         )
 
         if result:
-            print(f"Connected with IOCR!")
+            print("Connected with IOCR!")
             print(f"  Input Frame ID:  0x{result.input_frame_id:04X}")
             print(f"  Output Frame ID: 0x{result.output_frame_id:04X}")
         else:
@@ -207,6 +205,7 @@ def main():
     except Exception as e:
         print(f"Connect failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -249,11 +248,7 @@ def main():
             reduction_ratio=reduction_ratio,
             data_length=48,  # Minimum padded length
             objects=[
-                IODataObject(
-                    slot=1, subslot=1,
-                    frame_offset=0, data_length=8,
-                    iops_offset=8
-                ),
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8),
             ],
         )
 
@@ -295,21 +290,25 @@ def main():
 
             # Print stats every 5 seconds
             if counter % 50 == 0:
-                print(f"Stats: TX={cyclic.stats.frames_sent}, "
-                      f"RX={cyclic.stats.frames_received}, "
-                      f"Missed={cyclic.stats.frames_missed}")
+                print(
+                    f"Stats: TX={cyclic.stats.frames_sent}, "
+                    f"RX={cyclic.stats.frames_received}, "
+                    f"Missed={cyclic.stats.frames_missed}"
+                )
 
         # Stop cyclic
         print("\nStopping cyclic exchange...")
         cyclic.stop()
-        print(f"Final stats: TX={cyclic.stats.frames_sent}, "
-              f"RX={cyclic.stats.frames_received}, "
-              f"Missed={cyclic.stats.frames_missed}")
+        print(
+            f"Final stats: TX={cyclic.stats.frames_sent}, "
+            f"RX={cyclic.stats.frames_received}, "
+            f"Missed={cyclic.stats.frames_missed}"
+        )
 
     else:
         print("\nNo IOCR established - cyclic IO not available")
         print("Keeping connection open for 10 seconds...")
-        for i in range(10):
+        for _i in range(10):
             if not running:
                 break
             time.sleep(1)

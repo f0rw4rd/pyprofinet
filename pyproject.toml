@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "profinet-py"
-version = "0.4.0"
+version = "0.5.0"
 description = "PROFINET IO-Controller library for Python"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -38,6 +38,9 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
+dependencies = [
+    "construct>=2.10",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -48,10 +51,10 @@ dev = [
     "ruff>=0.1.0",
 ]
 [project.urls]
-Homepage = "https://github.com/f0rw4rd/profinet-py"
-Repository = "https://github.com/f0rw4rd/profinet-py"
+Homepage = "https://github.com/f0rw4rd/profinet"
+Repository = "https://github.com/f0rw4rd/profinet"
 "Original Project" = "https://github.com/alfredkrohmer/profinet"
-Issues = "https://github.com/f0rw4rd/profinet-py/issues"
+Issues = "https://github.com/f0rw4rd/profinet/issues"
 
 [project.scripts]
 profinet = "profinet.cli:main"
@@ -76,7 +79,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "C4", "UP"]
-ignore = ["E501", "UP006", "UP007", "UP035", "UP045"]
+ignore = ["E501", "E402", "UP006", "UP007", "UP035", "UP038", "UP045"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

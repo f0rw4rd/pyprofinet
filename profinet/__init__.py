@@ -73,10 +73,19 @@ from .cyclic import (
     CyclicStats,
 )
 from .dcp import (
+    DCP_BLOCK_ERROR_IN_OPERATION,
+    DCP_BLOCK_ERROR_NAMES,
+    DCP_BLOCK_ERROR_OK,
+    DCP_BLOCK_ERROR_OPTION_UNSUPPORTED,
+    DCP_BLOCK_ERROR_RESOURCE,
+    DCP_BLOCK_ERROR_SET_NOT_POSSIBLE,
+    DCP_BLOCK_ERROR_SUBOPTION_NOT_SET,
+    DCP_BLOCK_ERROR_SUBOPTION_UNSUPPORTED,
     DCP_GET_SET_FRAME_ID,
     DCP_HELLO_FRAME_ID,
     # Frame IDs
-    DCP_IDENTIFY_FRAME_ID,
+    DCP_IDENTIFY_REQUEST_FRAME_ID,
+    DCP_IDENTIFY_RESPONSE_FRAME_ID,
     # Options
     DCP_MAX_NAME_LENGTH,
     DCP_OPTION_ALL,
@@ -85,11 +94,11 @@ from .dcp import (
     DCP_OPTION_DEVICE_INITIATIVE,
     DCP_OPTION_DHCP,
     DCP_OPTION_IP,
-    DCP_OPTION_LLDP,
     DCP_OPTION_MANUF_MAX,
     # Manufacturer options
     DCP_OPTION_MANUF_MIN,
     DCP_OPTION_NME,
+    DCP_OPTION_RESERVED,
     # Service IDs
     DCP_SERVICE_ID_GET,
     DCP_SERVICE_ID_HELLO,
@@ -111,15 +120,6 @@ from .dcp import (
     DCP_SUBOPTION_DHCP_SERVER_ID,
     DCP_SUBOPTION_DHCP_UUID,
     DCP_SUBOPTION_DHCP_VENDOR_SPEC,
-    DCP_SUBOPTION_LLDP_CHASSIS_ID,
-    DCP_SUBOPTION_LLDP_MGMT_ADDR,
-    DCP_SUBOPTION_LLDP_PORT_DESC,
-    # LLDP suboptions
-    DCP_SUBOPTION_LLDP_PORT_ID,
-    DCP_SUBOPTION_LLDP_SYSTEM_CAP,
-    DCP_SUBOPTION_LLDP_SYSTEM_DESC,
-    DCP_SUBOPTION_LLDP_SYSTEM_NAME,
-    DCP_SUBOPTION_LLDP_TTL,
     RESET_MODE_ALL_DATA,
     RESET_MODE_APPLICATION,
     # Legacy reset modes
@@ -131,7 +131,6 @@ from .dcp import (
     # Classes
     DCPDeviceDescription,
     DCPDHCPBlock,
-    DCPLLDPBlock,
     DCPResponseCode,
     DeviceInitiative,
     IPBlockInfo,
@@ -270,7 +269,7 @@ from .vendors import (
     profinet_vendor_map,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 __all__ = [
     # Protocol structures
     "EthernetHeader",
@@ -295,7 +294,6 @@ __all__ = [
     "DCPDeviceDescription",
     "DCPResponseCode",
     "DCPDHCPBlock",
-    "DCPLLDPBlock",
     "IPBlockInfo",
     "BlockQualifier",
     "ResetQualifier",
@@ -312,7 +310,8 @@ __all__ = [
     "signal_device",
     "reset_to_factory",
     # DCP Frame IDs
-    "DCP_IDENTIFY_FRAME_ID",
+    "DCP_IDENTIFY_REQUEST_FRAME_ID",
+    "DCP_IDENTIFY_RESPONSE_FRAME_ID",
     "DCP_GET_SET_FRAME_ID",
     "DCP_HELLO_FRAME_ID",
     # DCP Service IDs
@@ -329,7 +328,7 @@ __all__ = [
     "DCP_OPTION_IP",
     "DCP_OPTION_DEVICE",
     "DCP_OPTION_DHCP",
-    "DCP_OPTION_LLDP",
+    "DCP_OPTION_RESERVED",
     "DCP_OPTION_CONTROL",
     "DCP_OPTION_DEVICE_INITIATIVE",
     "DCP_OPTION_NME",
@@ -346,17 +345,17 @@ __all__ = [
     "DCP_SUBOPTION_DHCP_FQDN",
     "DCP_SUBOPTION_DHCP_UUID",
     "DCP_SUBOPTION_DHCP_CONTROL",
-    # DCP LLDP suboptions
-    "DCP_SUBOPTION_LLDP_PORT_ID",
-    "DCP_SUBOPTION_LLDP_CHASSIS_ID",
-    "DCP_SUBOPTION_LLDP_TTL",
-    "DCP_SUBOPTION_LLDP_PORT_DESC",
-    "DCP_SUBOPTION_LLDP_SYSTEM_NAME",
-    "DCP_SUBOPTION_LLDP_SYSTEM_DESC",
-    "DCP_SUBOPTION_LLDP_SYSTEM_CAP",
-    "DCP_SUBOPTION_LLDP_MGMT_ADDR",
     # DCP DeviceInitiative suboption
     "DCP_SUBOPTION_DEVICE_INITIATIVE",
+    # DCP Block Error codes
+    "DCP_BLOCK_ERROR_OK",
+    "DCP_BLOCK_ERROR_OPTION_UNSUPPORTED",
+    "DCP_BLOCK_ERROR_SUBOPTION_UNSUPPORTED",
+    "DCP_BLOCK_ERROR_SUBOPTION_NOT_SET",
+    "DCP_BLOCK_ERROR_RESOURCE",
+    "DCP_BLOCK_ERROR_SET_NOT_POSSIBLE",
+    "DCP_BLOCK_ERROR_IN_OPERATION",
+    "DCP_BLOCK_ERROR_NAMES",
     # Reset modes (legacy)
     "RESET_MODE_COMMUNICATION",
     "RESET_MODE_APPLICATION",

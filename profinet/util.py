@@ -21,8 +21,9 @@ import sys
 import time
 from collections import OrderedDict, namedtuple
 from collections.abc import Callable
-from struct import calcsize, pack, unpack
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
+
+import construct as cs
 
 from .exceptions import InvalidIPError, InvalidMACError, PermissionDeniedError, SocketError
 
@@ -70,8 +71,7 @@ def s2mac(mac_str: str) -> bytes:
 
     if not MAC_PATTERN.match(mac_str):
         raise InvalidMACError(
-            f"Invalid MAC address format: {mac_str!r}. "
-            "Expected format: aa:bb:cc:dd:ee:ff"
+            f"Invalid MAC address format: {mac_str!r}. Expected format: aa:bb:cc:dd:ee:ff"
         )
 
     try:
@@ -244,9 +244,9 @@ if sys.platform == "win32":
 
         lib.pcap_open_live.argtypes = [
             ctypes.c_char_p,  # device
-            ctypes.c_int,     # snaplen
-            ctypes.c_int,     # promisc
-            ctypes.c_int,     # to_ms
+            ctypes.c_int,  # snaplen
+            ctypes.c_int,  # promisc
+            ctypes.c_int,  # to_ms
             ctypes.c_char_p,  # errbuf
         ]
         lib.pcap_open_live.restype = _pcap_t_p
@@ -272,8 +272,8 @@ if sys.platform == "win32":
             _pcap_t_p,
             ctypes.POINTER(_bpf_program),
             ctypes.c_char_p,  # filter expression
-            ctypes.c_int,     # optimize
-            ctypes.c_uint,    # netmask
+            ctypes.c_int,  # optimize
+            ctypes.c_uint,  # netmask
         ]
         lib.pcap_compile.restype = ctypes.c_int
 
@@ -329,8 +329,14 @@ if sys.platform == "win32":
         try:
             dev = alldevs
             while dev:
-                name = dev.contents.name.decode("utf-8", errors="replace") if dev.contents.name else ""
-                desc = dev.contents.description.decode("utf-8", errors="replace") if dev.contents.description else ""
+                name = (
+                    dev.contents.name.decode("utf-8", errors="replace") if dev.contents.name else ""
+                )
+                desc = (
+                    dev.contents.description.decode("utf-8", errors="replace")
+                    if dev.contents.description
+                    else ""
+                )
                 devices.append((name, desc))
                 dev = dev.contents.next
         finally:
@@ -348,9 +354,12 @@ if sys.platform == "win32":
             The adapter GUID string (e.g., "{824533DB-...}"), or None if not found.
         """
         import winreg
+
         try:
             # Enumerate network adapter connections in the registry
-            base = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+            base = (
+                r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+            )
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as net_key:
                 i = 0
                 while True:
@@ -464,9 +473,9 @@ if sys.platform == "win32":
 
             self._handle = pcap.pcap_open_live(
                 device.encode("utf-8"),
-                65535,   # snaplen
-                1,       # promisc
-                1,       # read timeout in ms (low for responsiveness)
+                65535,  # snaplen
+                1,  # promisc
+                1,  # read timeout in ms (low for responsiveness)
                 errbuf,
             )
             if not self._handle:
@@ -489,9 +498,14 @@ if sys.platform == "win32":
         def _set_filter(self, expression: str) -> None:
             """Compile and apply a BPF filter expression."""
             filt = _bpf_program()
-            if self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0) != 0:
+            if (
+                self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0)
+                != 0
+            ):
                 err = self._pcap.pcap_geterr(self._handle)
-                logger.warning(f"pcap_compile failed for {expression!r}: {err.decode() if err else 'unknown'}")
+                logger.warning(
+                    f"pcap_compile failed for {expression!r}: {err.decode() if err else 'unknown'}"
+                )
                 return
             try:
                 if self._pcap.pcap_setfilter(self._handle, ctypes.byref(filt)) != 0:
@@ -701,9 +715,7 @@ if sys.platform == "win32":
 
             adapter_p = a.Next
 
-        raise SocketError(
-            f"No adapter matching {ifname!r} found via GetAdaptersAddresses"
-        )
+        raise SocketError(f"No adapter matching {ifname!r} found via GetAdaptersAddresses")
 
     def ethernet_socket(interface: str, ethertype: int = None) -> NpcapSocket:
         """Create raw Ethernet socket bound to interface (Windows).
@@ -821,7 +833,13 @@ elif sys.platform == "darwin":
         """Set up argtypes/restype for pcap functions (macOS)."""
         _pcap_t_p = ctypes.POINTER(_pcap_t)
 
-        lib.pcap_open_live.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
+        lib.pcap_open_live.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_char_p,
+        ]
         lib.pcap_open_live.restype = _pcap_t_p
 
         lib.pcap_close.argtypes = [_pcap_t_p]
@@ -837,7 +855,13 @@ elif sys.platform == "darwin":
         ]
         lib.pcap_next_ex.restype = ctypes.c_int
 
-        lib.pcap_compile.argtypes = [_pcap_t_p, ctypes.POINTER(_bpf_program), ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
+        lib.pcap_compile.argtypes = [
+            _pcap_t_p,
+            ctypes.POINTER(_bpf_program),
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
         lib.pcap_compile.restype = ctypes.c_int
 
         lib.pcap_setfilter.argtypes = [_pcap_t_p, ctypes.POINTER(_bpf_program)]
@@ -849,7 +873,10 @@ elif sys.platform == "darwin":
         lib.pcap_setnonblock.argtypes = [_pcap_t_p, ctypes.c_int, ctypes.c_char_p]
         lib.pcap_setnonblock.restype = ctypes.c_int
 
-        lib.pcap_findalldevs.argtypes = [ctypes.POINTER(ctypes.POINTER(_pcap_if_t)), ctypes.c_char_p]
+        lib.pcap_findalldevs.argtypes = [
+            ctypes.POINTER(ctypes.POINTER(_pcap_if_t)),
+            ctypes.c_char_p,
+        ]
         lib.pcap_findalldevs.restype = ctypes.c_int
 
         lib.pcap_freealldevs.argtypes = [ctypes.POINTER(_pcap_if_t)]
@@ -881,8 +908,8 @@ elif sys.platform == "darwin":
             self._handle = pcap.pcap_open_live(
                 interface.encode("utf-8"),
                 65535,  # snaplen
-                1,      # promisc
-                1,      # read timeout ms
+                1,  # promisc
+                1,  # read timeout ms
                 errbuf,
             )
             if not self._handle:
@@ -899,7 +926,10 @@ elif sys.platform == "darwin":
 
         def _set_filter(self, expression: str) -> None:
             filt = _bpf_program()
-            if self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0) != 0:
+            if (
+                self._pcap.pcap_compile(self._handle, ctypes.byref(filt), expression.encode(), 1, 0)
+                != 0
+            ):
                 return
             try:
                 self._pcap.pcap_setfilter(self._handle, ctypes.byref(filt))
@@ -975,6 +1005,7 @@ elif sys.platform == "darwin":
             raise SocketError("Interface name cannot be empty")
 
         import subprocess
+
         try:
             output = subprocess.check_output(
                 ["ifconfig", ifname], stderr=subprocess.DEVNULL, text=True
@@ -1053,7 +1084,7 @@ else:
                 info = ioctl(
                     s.fileno(),
                     SIOCGIFHWADDR,
-                    pack("256s", bytes(ifname[:15], "ascii")),
+                    bytes(ifname[:15], "ascii").ljust(256, b"\x00"),
                 )
             return info[18:24]
         except OSError as e:
@@ -1113,6 +1144,7 @@ def udp_socket(host: str, port: int, timeout: float = 5.0):
         SocketError: If socket creation fails
     """
     import socket as _sock
+
     try:
         s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
         s.settimeout(timeout)
@@ -1167,10 +1199,47 @@ max_timeout = MaxTimeout
 
 
 # =============================================================================
-# Packet Factory
+# Packet Factory (construct-backed)
 # =============================================================================
 
-FieldSpec = Union[str, Tuple[str, str | Callable[[bytes], str]]]
+# Mapping from struct format characters to construct types (big-endian)
+_STRUCT_TO_CONSTRUCT: Dict[str, Any] = {
+    "B": cs.Int8ub,
+    "b": cs.Int8sb,
+    "H": cs.Int16ub,
+    "h": cs.Int16sb,
+    "I": cs.Int32ub,
+    "i": cs.Int32sb,
+    "Q": cs.Int64ub,
+    "q": cs.Int64sb,
+}
+
+
+def _struct_fmt_to_construct(field_name: str, fmt_char: str) -> cs.Construct:
+    """Convert a single struct format character to a construct type.
+
+    Handles both fixed-size integer types (B, H, I, etc.) and fixed-size
+    byte strings (e.g., '6s', '16s').
+
+    Args:
+        field_name: Name for the construct field
+        fmt_char: struct format string (e.g., 'B', 'H', '6s', '16s')
+
+    Returns:
+        construct Subconstruct for this field
+    """
+    if fmt_char in _STRUCT_TO_CONSTRUCT:
+        return _STRUCT_TO_CONSTRUCT[fmt_char]
+
+    # Handle fixed-size byte strings like '6s', '16s', '3s'
+    if fmt_char.endswith("s"):
+        byte_count = int(fmt_char[:-1])
+        return cs.Bytes(byte_count)
+
+    raise ValueError(f"Unsupported struct format: {fmt_char!r} for field {field_name!r}")
+
+
+FieldSpec = Union[str, Tuple[str, "str | Callable[[bytes], str]"]]
 
 
 def make_packet(
@@ -1183,10 +1252,13 @@ def make_packet(
     vlf: Optional[str] = None,
     vlf_size_field: Optional[str] = None,
 ) -> Type:
-    """Create a packet class from field definitions.
+    """Create a packet class from field definitions using construct.
 
     This factory creates namedtuple-based packet classes that can both
-    parse binary data and serialize to bytes.
+    parse binary data and serialize to bytes.  Internally the binary
+    layout is described with a ``construct.Struct`` for readability,
+    while the external API remains the same namedtuple interface used
+    throughout the codebase.
 
     Args:
         name: Class name for the packet type
@@ -1215,10 +1287,18 @@ def make_packet(
         statics = {}
 
     fields_dict = OrderedDict(fields)
-    fmt = ">" + "".join(
-        (f[0] if isinstance(f, tuple) else f) for f in fields_dict.values()
-    )
-    size = calcsize(fmt)
+
+    # --- Build construct Struct for the fixed-size header -----------------
+    cs_fields: list = []
+    for field_name, field_spec in fields_dict.items():
+        raw_fmt = field_spec[0] if isinstance(field_spec, tuple) else field_spec
+        cs_fields.append(field_name / _struct_fmt_to_construct(field_name, raw_fmt))
+
+    cs_struct = cs.Struct(*cs_fields)
+    size: int = cs_struct.sizeof()
+
+    # Keep the struct fmt string for backward compat (some code reads .fmt)
+    fmt = ">" + "".join((f[0] if isinstance(f, tuple) else f) for f in fields_dict.values())
 
     # Build field list for namedtuple
     field_names = list(fields_dict.keys())
@@ -1230,7 +1310,7 @@ def make_packet(
     base_tuple = namedtuple(name, field_names)
 
     class PacketClass(base_tuple):
-        """Packet class created by make_packet factory."""
+        """Packet class created by make_packet factory (construct-backed)."""
 
         def __new__(cls, *args: Any, **kwargs: Any) -> PacketClass:
             # Parse mode: single bytes argument
@@ -1242,8 +1322,9 @@ def make_packet(
                         f"{name}: insufficient data, need {size} bytes, got {len(data)}"
                     )
 
-                # Unpack fixed-size fields
-                unpacked = unpack(fmt, data[:size])
+                # Parse fixed-size fields via construct
+                parsed = cs_struct.parse(data[:size])
+                unpacked = tuple(parsed[fn] for fn in fields_dict.keys())
 
                 kw: Dict[str, Any] = {}
 
@@ -1304,8 +1385,11 @@ def make_packet(
             return "\n".join(lines)
 
         def __bytes__(self) -> bytes:
-            """Serialize packet to bytes."""
-            packed = pack(fmt, *(getattr(self, key) for key in fields_dict.keys()))
+            """Serialize packet to bytes via construct."""
+            build_dict = {}
+            for key in fields_dict.keys():
+                build_dict[key] = getattr(self, key)
+            packed = cs_struct.build(build_dict)
             if vlf is not None:
                 packed += bytes(getattr(self, vlf))
             if payload:
@@ -1324,6 +1408,7 @@ def make_packet(
     # Set class attributes
     PacketClass.fmt = fmt
     PacketClass.fmt_size = size
+    PacketClass.cs_struct = cs_struct
     PacketClass.__name__ = name
     PacketClass.__qualname__ = name
 

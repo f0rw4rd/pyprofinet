@@ -1,20 +1,19 @@
 """Tests for profinet.rt module (Real-Time frame handling)."""
 
 import pytest
+
 from profinet.rt import (
-    RTFrame,
-    IOCRConfig,
-    IODataObject,
-    CyclicDataBuilder,
-    ETHERTYPE_PROFINET,
+    DATA_STATUS_PROVIDER_RUN,
+    DATA_STATUS_STATE,
+    DATA_STATUS_STATION_OK,
+    DATA_STATUS_VALID,
     IOCR_TYPE_INPUT,
     IOCR_TYPE_OUTPUT,
-    DATA_STATUS_VALID,
-    DATA_STATUS_PROVIDER_RUN,
-    DATA_STATUS_STATION_OK,
-    DATA_STATUS_STATE,
     IOXS_GOOD,
-    IOXS_BAD,
+    CyclicDataBuilder,
+    IOCRConfig,
+    IODataObject,
+    RTFrame,
     build_ethernet_frame,
     parse_ethernet_frame,
 )
@@ -26,7 +25,7 @@ class TestRTFrame:
     def test_from_bytes_minimal(self):
         """Test parsing minimal RT frame."""
         # Frame ID + 2 byte payload + cycle(2) + status(2)
-        data = b"\xC0\x00\x01\x02\x12\x34\xA4\x00"
+        data = b"\xc0\x00\x01\x02\x12\x34\xa4\x00"
         frame = RTFrame.from_bytes(data)
 
         assert frame.frame_id == 0xC000
@@ -40,10 +39,10 @@ class TestRTFrame:
         # 40-byte payload (minimum C_SDU size)
         payload = bytes(40)
         data = (
-            b"\xC0\x01"  # Frame ID
+            b"\xc0\x01"  # Frame ID
             + payload  # C_SDU
             + b"\x00\x42"  # Cycle counter
-            + b"\xA4\x00"  # Status bytes
+            + b"\xa4\x00"  # Status bytes
         )
         frame = RTFrame.from_bytes(data)
 
@@ -120,7 +119,7 @@ class TestRTFrame:
     def test_from_bytes_too_short(self):
         """Test parsing fails for too-short data."""
         with pytest.raises(ValueError, match="too short"):
-            RTFrame.from_bytes(b"\xC0\x00\x00")
+            RTFrame.from_bytes(b"\xc0\x00\x00")
 
     def test_repr(self):
         """Test string representation."""
@@ -201,9 +200,7 @@ class TestCyclicDataBuilder:
             frame_id=0xC000,
             data_length=48,
             objects=[
-                IODataObject(
-                    slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8
-                ),
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8),
             ],
         )
         builder = CyclicDataBuilder(config)
@@ -222,9 +219,7 @@ class TestCyclicDataBuilder:
             frame_id=0xC000,
             data_length=16,
             objects=[
-                IODataObject(
-                    slot=1, subslot=1, frame_offset=0, data_length=4, iops_offset=4
-                ),
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=4, iops_offset=4),
             ],
         )
         builder = CyclicDataBuilder(config)
@@ -292,7 +287,7 @@ class TestCyclicDataBuilder:
             ],
         )
         builder = CyclicDataBuilder(config)
-        builder.set_data(1, 1, b"\xFF" * 8)
+        builder.set_data(1, 1, b"\xff" * 8)
         builder.clear()
         payload = builder.build()
 
@@ -330,14 +325,14 @@ class TestEthernetFrameHelpers:
         assert eth[0:6] == dst
         assert eth[6:12] == src
         assert eth[12:14] == b"\x88\x92"  # PROFINET EtherType
-        assert eth[14:16] == b"\xC0\x00"  # Frame ID
+        assert eth[14:16] == b"\xc0\x00"  # Frame ID
 
     def test_parse_ethernet_frame(self):
         """Test parsing Ethernet frame."""
         # Build a valid frame
         dst = b"\xd0\xc8\x57\xe0\x1c\x2c"
         src = b"\x00\x11\x22\x33\x44\x55"
-        rt_data = b"\xC0\x00\x01\x02\x03\x04\x00\x64\xA4\x00"  # RT frame
+        rt_data = b"\xc0\x00\x01\x02\x03\x04\x00\x64\xa4\x00"  # RT frame
         eth = dst + src + b"\x88\x92" + rt_data
 
         frame = parse_ethernet_frame(eth)

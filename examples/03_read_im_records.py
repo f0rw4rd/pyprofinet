@@ -2,6 +2,7 @@
 """Read all I&M records from device."""
 
 import os
+
 from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")

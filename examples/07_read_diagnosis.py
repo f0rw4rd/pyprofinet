@@ -2,6 +2,7 @@
 """Read diagnosis data from device."""
 
 import os
+
 from profinet import ProfinetDevice
 
 INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
