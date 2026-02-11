@@ -328,9 +328,9 @@ class TestControlCommandConstants:
     """Test control command constants."""
 
     def test_control_command_values(self):
-        """Test control command constant values."""
-        assert indices.CONTROL_CMD_PRM_END == 0x0001
-        assert indices.CONTROL_CMD_APPLICATION_READY == 0x0002
-        assert indices.CONTROL_CMD_RELEASE == 0x0003
-        assert indices.CONTROL_CMD_DONE == 0x0004
-        assert indices.CONTROL_CMD_PRM_BEGIN == 0x0007
+        """Test control command constant values (bit fields per IEC 61158-6-10)."""
+        assert indices.CONTROL_CMD_PRM_END == 0x0001  # BIT(0)
+        assert indices.CONTROL_CMD_APPLICATION_READY == 0x0002  # BIT(1)
+        assert indices.CONTROL_CMD_RELEASE == 0x0004  # BIT(2)
+        assert indices.CONTROL_CMD_DONE == 0x0008  # BIT(3)
+        assert indices.CONTROL_CMD_PRM_BEGIN == 0x0040  # BIT(6)

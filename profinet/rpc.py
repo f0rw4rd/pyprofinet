@@ -931,12 +931,15 @@ class RPCCon:
         # Connection state
         self.live: Optional[datetime] = None
         self.src_mac: Optional[bytes] = None
-        self.session_key: int = 1  # Session key for AR (default 1)
+        self.session_key: int = 0x1234  # Session key for AR
 
         # AlarmCR state
         self._alarm_ref: int = 1  # Controller's local alarm reference
         self._device_alarm_ref: int = 0  # Device's alarm reference (set after connect)
         self._alarm_cr_enabled: bool = False  # Whether AlarmCR was established
+
+        # RPC sequence number (incremented per request)
+        self._sequence_number: int = 0
 
         # IOCR state
         self._iocr_ref_counter: int = 1  # Counter for IOCR references
@@ -946,12 +949,30 @@ class RPCCon:
         self._output_frame_id: int = 0  # Assigned output frame ID
         self._iocr_setup: Optional[IOCRSetup] = None  # IOCR config if enabled
 
-        # UDP socket for RPC with timeout
+        # UDP socket for RPC with timeout.
+        # Bind to RPC_PORT (34964) so the device can send CControl
+        # (ApplicationReady) back to us on the well-known port.
+        import socket as _socket_mod
+
         self._socket = socket(AF_INET, SOCK_DGRAM)
+        self._socket.setsockopt(_socket_mod.SOL_SOCKET, _socket_mod.SO_REUSEADDR, 1)
         self._socket.settimeout(timeout)
+        try:
+            self._socket.bind(("", RPC_PORT))
+            logger.debug(f"RPC socket bound to port {RPC_PORT}")
+        except OSError as e:
+            # Port in use -- fall back to ephemeral port. CControl from
+            # the device may still arrive on the source port of our requests.
+            logger.warning(
+                f"Could not bind to port {RPC_PORT} ({e}), "
+                f"using ephemeral port -- CControl may not be received"
+            )
 
     def _create_rpc(self, operation: int, nrd: bytes) -> PNRPCHeader:
-        """Create RPC request packet."""
+        """Create RPC request packet with incrementing sequence number."""
+        seq = self._sequence_number
+        self._sequence_number += 1
+
         return PNRPCHeader(
             0x04,  # Version
             PNRPCHeader.REQUEST,
@@ -964,7 +985,7 @@ class RPCCon:
             self.activity_uuid,
             0,  # ServerBootTime
             1,  # InterfaceVersion
-            0,  # SequenceNumber
+            seq,  # SequenceNumber
             operation,
             0xFFFF,  # InterfaceHint
             0xFFFF,  # ActivityHint
@@ -1409,7 +1430,7 @@ class RPCCon:
             bytes(block),
             ar_type,
             self.ar_uuid,
-            0x1234,  # Session key
+            self.session_key,
             self.src_mac,
             self.local_object_uuid,
             ar_properties,
@@ -1527,7 +1548,7 @@ class RPCCon:
 
                 result = ConnectResult(
                     ar_uuid=self.ar_uuid,
-                    session_key=0x1234,
+                    session_key=self.session_key,
                 )
                 # Parse input IOCR response for frame ID
                 self._input_frame_id = self._parse_iocr_response(nrd_resp.payload, 1)
@@ -2807,24 +2828,42 @@ class RPCCon:
         block_type: int,
         control_command: int,
         wait_response: bool = True,
+        sub_blocks: bytes = b"",
     ) -> Optional[bytes]:
         """Send a CONTROL operation request.
 
-        Per IEC 61158-6-10, CONTROL is used for AR lifecycle state transitions.
+        Per IEC 61158-6-10, CONTROL is used for AR lifecycle state transitions:
+        - PrmEnd (0x0110, cmd=0x0001): End parameter phase
+        - ApplicationReady (0x0112, cmd=0x0002): Signal ready for cyclic IO
+        - PrmBegin (0x0118, cmd=0x0007): Begin (re-)parameterization
+
+        All use the same IODControlReq block structure (same as ReleaseBlock).
+        Some commands (notably ApplicationReady) may include additional sub-blocks
+        appended after the control block in the NRD payload.
 
         Args:
             block_type: Block type (e.g., 0x0110 for PrmEnd, 0x0112 for AppReady)
             control_command: Control command value
             wait_response: Whether to wait for response
+            sub_blocks: Additional blocks to append after the control block
+                       (e.g., SubmoduleListBlock for ApplicationReady)
 
         Returns:
-            Response payload if wait_response=True, else None
+            NRD payload bytes if wait_response=True, else None
 
         Raises:
             RPCError: If control fails and wait_response=True
+            PNIOError: If device returns PNIO error status
         """
         if not self.live:
             raise RPCError("Not connected")
+
+        from .indices import get_block_type_name
+
+        block_name = get_block_type_name(block_type)
+        logger.debug(
+            f"Sending control: {block_name} (0x{block_type:04X}), cmd=0x{control_command:04X}"
+        )
 
         # Build control block (same structure as release block)
         block = PNBlockHeader(block_type, 28, 0x01, 0x00)
@@ -2840,76 +2879,340 @@ class RPCCon:
             payload=b"",
         )
 
-        nrd = self._create_nrd(bytes(control_block))
+        # NRD payload = control block + optional sub-blocks
+        nrd_payload = bytes(control_block) + sub_blocks
+        nrd = self._create_nrd(nrd_payload)
         rpc = self._create_rpc(PNRPCHeader.CONTROL, bytes(nrd))
 
         if not wait_response:
             self._socket.sendto(bytes(rpc), self.peer)
-            logger.debug(f"Sent control 0x{control_command:04X} to {self.info.name}")
+            logger.debug(f"Sent {block_name} (fire-and-forget)")
             return None
 
-        response = self._send_receive(rpc)
-        return response
+        rpc_resp = self._send_receive(rpc)
+        nrd_resp = PNNRDData(rpc_resp.payload)
 
-    def prm_begin(self) -> bytes:
+        # Check for PNIO errors in ArgsStatus field
+        args_status = nrd_resp.args_maximum_status
+        if args_status != 0:
+            logger.error(f"Control {block_name} failed: PNIO error status 0x{args_status:08X}")
+            raise PNIOError.from_args_status(args_status)
+
+        logger.debug(f"Control {block_name} OK (response payload: {len(nrd_resp.payload)} bytes)")
+        return nrd_resp.payload
+
+    def prm_begin(self) -> Optional[bytes]:
         """Send PrmBegin control command.
 
-        Starts the parameter phase for AR configuration.
-        Should be called after CONNECT before writing parameters.
+        Starts (or restarts) the parameter phase for AR configuration.
+        Used for re-parameterization of an existing AR. For initial AR setup,
+        the PRM phase begins implicitly after CONNECT.
 
         Returns:
-            Response payload
+            NRD response payload bytes
 
         Raises:
             RPCError: If control fails
+            PNIOError: If device returns PNIO error
         """
         from .indices import BLOCK_PRM_BEGIN_REQ, CONTROL_CMD_PRM_BEGIN
 
         return self._send_control(BLOCK_PRM_BEGIN_REQ, CONTROL_CMD_PRM_BEGIN)
 
-    def prm_end(self) -> bytes:
+    def prm_end(self) -> Optional[bytes]:
         """Send PrmEnd control command.
 
         Ends the parameter phase after configuration is complete.
-        Should be called after all parameters are written.
+        For IOCARSingle, this should be called after CONNECT (and any
+        parameter writes) to transition to DATA state.
 
         Returns:
-            Response payload
+            NRD response payload bytes
 
         Raises:
             RPCError: If control fails
+            PNIOError: If device returns PNIO error
         """
         from .indices import BLOCK_IOD_CONTROL_PRM_END_REQ, CONTROL_CMD_PRM_END
 
         return self._send_control(BLOCK_IOD_CONTROL_PRM_END_REQ, CONTROL_CMD_PRM_END)
 
-    def application_ready(self) -> bytes:
-        """Send ApplicationReady control command.
+    @staticmethod
+    def _parse_rpc_header(data: bytes) -> Optional[dict]:
+        """Parse DCE/RPC header with DREP-aware endianness.
 
-        Signals that the application is ready for cyclic data exchange.
-        Should be called after PrmEnd.
+        DCE/RPC specifies that multi-byte integer fields follow the byte
+        order indicated by the DREP (Data Representation) field at offset 4.
+        DREP byte 0: 0x00 = big-endian, 0x10 = little-endian.
 
         Returns:
-            Response payload
+            dict with header fields, or None if data is too short.
+        """
+        import struct
+
+        if len(data) < 80:  # Minimum RPC header size
+            return None
+
+        # Single-byte fields are endian-independent
+        version = data[0]
+        packet_type = data[1]
+        flags1 = data[2]
+        flags2 = data[3]
+        drep = data[4:7]
+        serial_high = data[7]
+
+        # Determine endianness from DREP byte 0
+        is_little_endian = (drep[0] & 0x10) != 0
+        bo = "<" if is_little_endian else ">"
+
+        # UUIDs (16 bytes each) at offsets 8, 24, 40 -- always mixed-endian
+        object_uuid = data[8:24]
+        interface_uuid = data[24:40]
+        activity_uuid = data[40:56]
+
+        # Multi-byte fields after UUIDs, in DREP byte order
+        server_boot_time = struct.unpack_from(f"{bo}I", data, 56)[0]
+        interface_version = struct.unpack_from(f"{bo}I", data, 60)[0]
+        sequence_number = struct.unpack_from(f"{bo}I", data, 64)[0]
+        operation_number = struct.unpack_from(f"{bo}H", data, 68)[0]
+        interface_hint = struct.unpack_from(f"{bo}H", data, 70)[0]
+        activity_hint = struct.unpack_from(f"{bo}H", data, 72)[0]
+        length_of_body = struct.unpack_from(f"{bo}H", data, 74)[0]
+        fragment_number = struct.unpack_from(f"{bo}H", data, 76)[0]
+        auth_protocol = data[78]
+        serial_low = data[79]
+
+        payload = data[80:]
+
+        return {
+            "version": version,
+            "packet_type": packet_type,
+            "flags1": flags1,
+            "flags2": flags2,
+            "drep": drep,
+            "serial_high": serial_high,
+            "object_uuid": object_uuid,
+            "interface_uuid": interface_uuid,
+            "activity_uuid": activity_uuid,
+            "server_boot_time": server_boot_time,
+            "interface_version": interface_version,
+            "sequence_number": sequence_number,
+            "operation_number": operation_number,
+            "interface_hint": interface_hint,
+            "activity_hint": activity_hint,
+            "length_of_body": length_of_body,
+            "fragment_number": fragment_number,
+            "auth_protocol": auth_protocol,
+            "serial_low": serial_low,
+            "payload": payload,
+            "is_little_endian": is_little_endian,
+        }
+
+    def application_ready(self, timeout: float = 30.0) -> bytes:
+        """Wait for and confirm ApplicationReady from the IO-Device.
+
+        In PROFINET, ApplicationReady is a CControl request sent by the
+        IO-Device to the IO-Controller after PrmEnd. The controller must
+        listen for this incoming request and respond with a confirmation
+        (control_command=DONE).
+
+        This method:
+        1. Listens on the RPC socket for an incoming CControl request
+        2. Validates it is an ApplicationReady (block type 0x0112, cmd 0x0002)
+        3. Sends back a CControl response (block type 0x8112, cmd DONE=0x0008)
+
+        Args:
+            timeout: Max seconds to wait for the device's ApplicationReady.
+                     Default 30s (devices may need time after PrmEnd).
+
+        Returns:
+            NRD payload bytes from the device's CControl request
 
         Raises:
-            RPCError: If control fails
+            RPCTimeoutError: If no ApplicationReady received within timeout
+            RPCError: If received packet is not a valid CControl
         """
-        from .indices import BLOCK_IOD_CONTROL_APP_READY_REQ, CONTROL_CMD_APPLICATION_READY
+        import struct
 
-        return self._send_control(BLOCK_IOD_CONTROL_APP_READY_REQ, CONTROL_CMD_APPLICATION_READY)
+        if not self.live:
+            raise RPCError("Not connected")
 
-    def ready_for_rt_class_3(self) -> bytes:
+        from .indices import (
+            BLOCK_IOD_CONTROL_APP_READY_RES,
+            CONTROL_CMD_DONE,
+        )
+
+        logger.info(f"Waiting up to {timeout:.0f}s for device CControl/ApplicationReady...")
+
+        # Temporarily set socket timeout for the wait
+        old_timeout = self._socket.gettimeout()
+        self._socket.settimeout(timeout)
+
+        try:
+            while True:
+                try:
+                    data, addr = self._socket.recvfrom(4096)
+                except TimeoutError:
+                    raise RPCTimeoutError(
+                        f"No ApplicationReady from {self.info.name} "
+                        f"({self.info.ip}) within {timeout:.0f}s"
+                    ) from None
+
+                logger.debug(f"Received {len(data)} bytes from {addr}: {data[:60].hex(' ')}...")
+
+                # Parse RPC header with DREP awareness
+                hdr = self._parse_rpc_header(data)
+                if hdr is None:
+                    logger.debug("Packet too short for RPC header, ignoring")
+                    continue
+
+                # Must be a REQUEST with opnum CONTROL
+                if hdr["packet_type"] != PNRPCHeader.REQUEST:
+                    logger.debug(f"Not a REQUEST (type=0x{hdr['packet_type']:02X}), ignoring")
+                    continue
+
+                if hdr["operation_number"] != PNRPCHeader.CONTROL:
+                    logger.debug(f"Not CONTROL opnum (op={hdr['operation_number']}), ignoring")
+                    continue
+
+                logger.info(
+                    f"Received CControl request from {addr} "
+                    f"(seq={hdr['sequence_number']}, "
+                    f"body={hdr['length_of_body']} bytes, "
+                    f"drep={'LE' if hdr['is_little_endian'] else 'BE'})"
+                )
+
+                # Parse NRD from the request payload, respecting DREP
+                nrd_payload = hdr["payload"]
+                bo = "<" if hdr["is_little_endian"] else ">"
+                if len(nrd_payload) < 20:
+                    logger.warning("NRD header too short")
+                    continue
+
+                nrd_args_max = struct.unpack_from(f"{bo}I", nrd_payload, 0)[0]
+                nrd_args_len = struct.unpack_from(f"{bo}I", nrd_payload, 4)[0]
+                struct.unpack_from(f"{bo}I", nrd_payload, 8)[0]  # max_count
+                struct.unpack_from(f"{bo}I", nrd_payload, 12)[0]  # offset
+                nrd_actual = struct.unpack_from(f"{bo}I", nrd_payload, 16)[0]
+                nrd_body = nrd_payload[20:]
+
+                logger.debug(
+                    f"CControl NRD: args_max={nrd_args_max}, "
+                    f"args_len={nrd_args_len}, actual={nrd_actual}, "
+                    f"body={len(nrd_body)} bytes"
+                )
+
+                # Parse control block from NRD body
+                # PROFINET blocks are always big-endian regardless of DREP
+                if len(nrd_body) < 32:
+                    logger.warning(f"CControl payload too short: {len(nrd_body)} bytes")
+                    continue
+
+                block_type = struct.unpack_from(">H", nrd_body, 0)[0]
+                # control_command at offset 28: header(6) + pad(2) +
+                # ar_uuid(16) + session_key(2) + alarm_seq(2)
+                control_cmd = struct.unpack_from(">H", nrd_body, 28)[0]
+
+                logger.info(f"CControl block: type=0x{block_type:04X}, cmd=0x{control_cmd:04X}")
+
+                # Verify this is ApplicationReady
+                if block_type != 0x0112:
+                    logger.warning(f"Expected ApplicationReady (0x0112), got 0x{block_type:04X}")
+                    continue
+
+                if control_cmd != 0x0002:
+                    logger.warning(
+                        f"Expected control_command 0x0002 (APP_RDY), got 0x{control_cmd:04X}"
+                    )
+
+                # Build CControl response
+                # Response block type 0x8112, control_command = DONE (0x0008)
+                resp_block = PNBlockHeader(BLOCK_IOD_CONTROL_APP_READY_RES, 28, 0x01, 0x00)
+                resp_control = PNIODReleaseBlock(
+                    block_header=bytes(resp_block),
+                    padding1=0,
+                    ar_uuid=self.ar_uuid,
+                    session_key=self.session_key,
+                    padding2=0,
+                    control_command=CONTROL_CMD_DONE,
+                    control_block_properties=0,
+                    payload=b"",
+                )
+
+                # Build NRD for response.
+                # For a RESPONSE, the first field is PNIO status (0 = OK),
+                # not args_maximum.  The device expects:
+                #   pnio_status(4) + args_length(4) + max_count(4) +
+                #   offset(4) + actual_count(4) + payload
+                resp_nrd_payload = bytes(resp_control)
+                resp_nrd_len = len(resp_nrd_payload)
+
+                # Use same byte order as the device's request
+                resp_nrd = (
+                    struct.pack(
+                        f"{bo}IIIII",
+                        0,  # pnio_status = OK
+                        resp_nrd_len,  # args_length
+                        resp_nrd_len,  # maximum_count
+                        0,  # offset
+                        resp_nrd_len,  # actual_count
+                    )
+                    + resp_nrd_payload
+                )
+
+                # Build RPC response header.
+                # Echo the device's DREP, UUIDs, sequence number.
+                resp_hdr = struct.pack(
+                    "!BB BB 3s B",
+                    hdr["version"],
+                    PNRPCHeader.RESPONSE,
+                    0x00,  # flags1
+                    0x00,  # flags2
+                    hdr["drep"],
+                    hdr["serial_high"],
+                )
+                resp_hdr += hdr["object_uuid"]  # 16 bytes
+                resp_hdr += hdr["interface_uuid"]  # 16 bytes
+                resp_hdr += hdr["activity_uuid"]  # 16 bytes
+                resp_hdr += struct.pack(
+                    f"{bo}II I HHH H HBB",
+                    0,  # server_boot_time
+                    hdr["interface_version"],
+                    hdr["sequence_number"],
+                    hdr["operation_number"],
+                    0xFFFF,  # interface_hint
+                    0xFFFF,  # activity_hint
+                    len(resp_nrd),  # length_of_body
+                    0,  # fragment_number
+                    0,  # auth_protocol
+                    hdr["serial_low"],
+                )
+                resp_bytes = resp_hdr + resp_nrd
+
+                # Send response back to the device
+                logger.info(f"Sending CControl response ({len(resp_bytes)} bytes) to {addr}")
+                logger.debug(f"CControl response: {resp_bytes.hex(' ')}")
+                self._socket.sendto(resp_bytes, addr)
+
+                logger.info("ApplicationReady confirmed (DONE)")
+                self.live = datetime.now()
+                return nrd_body
+
+        finally:
+            self._socket.settimeout(old_timeout)
+
+    def ready_for_rt_class_3(self) -> Optional[bytes]:
         """Send ReadyForRT_CLASS_3 control command.
 
         Signals readiness for isochronous real-time data exchange.
         Only relevant for RT_CLASS_3 (IRT) ARs.
 
         Returns:
-            Response payload
+            NRD response payload bytes
 
         Raises:
             RPCError: If control fails
+            PNIOError: If device returns PNIO error
         """
         from .indices import BLOCK_IOD_CONTROL_RT_CLASS_3_REQ, CONTROL_CMD_READY_FOR_RT_CLASS_3
 

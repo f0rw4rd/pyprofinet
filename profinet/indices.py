@@ -81,15 +81,16 @@ BLOCK_IOD_CONTROL_RT_CLASS_3_REQ = 0x0117
 BLOCK_IOD_CONTROL_RT_CLASS_3_RES = 0x8117
 BLOCK_PRM_BEGIN_REQ = 0x0118
 BLOCK_PRM_BEGIN_RES = 0x8118
+BLOCK_SUBMODULE_LIST = 0x0119  # SubmoduleListBlock (appended to ApplicationReady)
 
-# Control command values (used in control_command field)
-CONTROL_CMD_PRM_END = 0x0001  # End parameter phase
-CONTROL_CMD_APPLICATION_READY = 0x0002  # Signal application ready
-CONTROL_CMD_RELEASE = 0x0003  # Release AR (deprecated, use DONE)
-CONTROL_CMD_DONE = 0x0004  # Terminate AR
-CONTROL_CMD_READY_FOR_COMPANION = 0x0005  # Ready for companion AR
-CONTROL_CMD_READY_FOR_RT_CLASS_3 = 0x0006  # Ready for isochronous mode
-CONTROL_CMD_PRM_BEGIN = 0x0007  # Begin parameter phase
+# Control command values (bit field, each is BIT(n) per IEC 61158-6-10)
+CONTROL_CMD_PRM_END = 0x0001  # BIT(0): End parameter phase
+CONTROL_CMD_APPLICATION_READY = 0x0002  # BIT(1): Signal application ready
+CONTROL_CMD_RELEASE = 0x0004  # BIT(2): Release AR
+CONTROL_CMD_DONE = 0x0008  # BIT(3): Confirm/Done (used in CControl response)
+CONTROL_CMD_READY_FOR_COMPANION = 0x0010  # BIT(4): Ready for companion AR
+CONTROL_CMD_READY_FOR_RT_CLASS_3 = 0x0020  # BIT(5): Ready for isochronous mode
+CONTROL_CMD_PRM_BEGIN = 0x0040  # BIT(6): Begin parameter phase
 
 # Port and interface data blocks
 BLOCK_PD_PORT_DATA_CHECK = 0x0200
@@ -165,6 +166,7 @@ BLOCK_TYPE_NAMES: Dict[int, str] = {
     BLOCK_IOD_CONTROL_RT_CLASS_3_RES: "IODControlResRTClass3",
     BLOCK_PRM_BEGIN_REQ: "PrmBeginReq",
     BLOCK_PRM_BEGIN_RES: "PrmBeginRes",
+    BLOCK_SUBMODULE_LIST: "SubmoduleListBlock",
     BLOCK_AR_DATA: "ARData",
     BLOCK_LOG_DATA: "LogData",
     BLOCK_API_DATA: "APIData",
