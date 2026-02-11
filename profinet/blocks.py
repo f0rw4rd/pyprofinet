@@ -1306,11 +1306,12 @@ class ExpectedSubmoduleBlockReq:
             self.apis.append(api_entry)
 
         # Build data descriptions based on submodule type.
-        # Per IEC 61158-6-10 (confirmed by Wireshark dissector and p-net):
+        # Per IEC 61158-6-10 and p-net reference:
         # - NO_IO (0): 1 Input DataDescription with data_length=0
         # - INPUT (1): 1 Input DataDescription
         # - OUTPUT (2): 1 Output DataDescription
-        # - INPUT_OUTPUT (3): 1 Input + 1 Output DataDescription
+        # - INPUT_OUTPUT (3): 2 DataDescriptions (Input + Output)
+        # Note: p-net always reads at least 1 DataDescription, even for NO_IO.
         dds = []
         if submodule_type == 0:  # NO_IO
             dds.append(ExpectedSubmoduleDataDescription(1, 0, 1, 1))

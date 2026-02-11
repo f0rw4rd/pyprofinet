@@ -986,32 +986,6 @@ class RPCCon:
             payload=payload,
         )
 
-    @staticmethod
-    def _pad_block(block_data: bytes) -> bytes:
-        """Pad a serialized block to 4-byte alignment.
-
-        Per IEC 61158-6-10, each block in the NRD payload must be
-        4-byte aligned. The padding bytes are appended to the block
-        body and BlockLength is increased to include them. This keeps
-        padding within the block's scope so subsequent block headers
-        start at a 4-byte boundary.
-
-        Args:
-            block_data: Complete serialized block (type + length + body)
-
-        Returns:
-            Padded block with updated BlockLength
-        """
-        total = len(block_data)
-        pad_len = (4 - total % 4) % 4
-        if pad_len == 0:
-            return block_data
-
-        # Update BlockLength field (bytes 2-3, big-endian) to include padding
-        old_length = int.from_bytes(block_data[2:4], "big")
-        new_length = old_length + pad_len
-        return block_data[:2] + new_length.to_bytes(2, "big") + block_data[4:] + bytes(pad_len)
-
     def _build_alarm_cr_block(
         self,
         transport: int = 0,
@@ -1055,7 +1029,7 @@ class RPCCon:
             alarm_cr_tag_header_low=PNAlarmCRBlockReq.DEFAULT_TAG_HEADER_LOW,
         )
 
-        return self._pad_block(bytes(alarm_cr))
+        return bytes(alarm_cr)
 
     def _parse_alarm_cr_response(self, response_data: bytes) -> int:
         """Parse AlarmCRBlockRes from connect response.
@@ -1064,7 +1038,7 @@ class RPCCon:
             response_data: NRD payload containing response blocks
 
         Returns:
-            Device's local alarm reference, or 0 if not found
+            Device's local alarm reference, or -1 if not found
         """
         # Scan for block type 0x8103 (AlarmCRBlockRes)
         offset = 0
@@ -1081,10 +1055,8 @@ class RPCCon:
 
             # Move to next block (block_length + 4 for header)
             offset += 4 + hdr.block_length
-            # Align to 4 bytes
-            offset = (offset + 3) & ~3
 
-        return 0
+        return -1
 
     def _build_iocr_block(
         self,
@@ -1217,7 +1189,7 @@ class RPCCon:
             number_of_apis=1,
         )
 
-        return self._pad_block(bytes(iocr_header) + api_block)
+        return bytes(iocr_header) + api_block
 
     def _build_expected_submodule_block(
         self,
@@ -1260,7 +1232,7 @@ class RPCCon:
                 output_length=slot_cfg.output_length,
             )
 
-        return self._pad_block(builder.to_bytes())
+        return builder.to_bytes()
 
     def _parse_iocr_response(
         self,
@@ -1295,7 +1267,6 @@ class RPCCon:
 
             # Move to next block
             offset += 4 + hdr.block_length
-            offset = (offset + 3) & ~3  # Align to 4 bytes
 
         logger.debug(f"No IOCRBlockRes found for iocr_type={iocr_type}")
         return 0
@@ -1450,11 +1421,10 @@ class RPCCon:
         )
 
         # Build NRD payload with AR block.
-        # Each block is padded to 4-byte alignment via _pad_block(), which
-        # appends padding bytes and includes them in BlockLength. This
-        # ensures all blocks start at 4-byte boundaries, which some device
-        # firmware (e.g. E-T-A, Siemens) requires for correct parsing.
-        nrd_payload = self._pad_block(bytes(ar))
+        # Blocks are concatenated directly without inter-block padding.
+        # Per p-net and scapy reference implementations, request blocks
+        # are NOT padded -- the parser advances by 4 + block_length.
+        nrd_payload = bytes(ar)
 
         # Add IOCR blocks if cyclic IO requested
         if iocr_setup:
@@ -1506,7 +1476,6 @@ class RPCCon:
                     f"  Block at {_off}: type=0x{_bt:04X} length={_bl} raw={_block_data.hex(' ')}"
                 )
                 _off += 4 + _bl
-                _off = (_off + 3) & ~3
 
         nrd = self._create_nrd(nrd_payload)
         rpc = self._create_rpc(PNRPCHeader.CONNECT, bytes(nrd))
@@ -1555,7 +1524,6 @@ class RPCCon:
                         f"type=0x{_hdr.block_type:04X} length={_hdr.block_length}"
                     )
                     _off += 4 + _hdr.block_length
-                    _off = (_off + 3) & ~3  # Align to 4 bytes
 
                 result = ConnectResult(
                     ar_uuid=self.ar_uuid,
@@ -1576,7 +1544,7 @@ class RPCCon:
             # Parse AlarmCR response if enabled
             if with_alarm_cr:
                 self._device_alarm_ref = self._parse_alarm_cr_response(nrd_resp.payload)
-                if self._device_alarm_ref > 0:
+                if self._device_alarm_ref >= 0:
                     self._alarm_cr_enabled = True
                     logger.debug(f"AlarmCR established, device ref: {self._device_alarm_ref}")
                     if result:

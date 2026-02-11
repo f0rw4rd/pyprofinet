@@ -1053,6 +1053,23 @@ class TestExpectedSubmodule:
         # H(2) + I(4) + H(2) + DD(6) = 14 (no NumberOfDataDescriptions field)
         assert len(data) == 14
 
+    def test_to_bytes_no_io_with_data_description(self):
+        """Test NO_IO submodule has 1 DataDescription (per p-net reference).
+
+        Even for NO_IO, the device expects exactly 1 Input DataDescription
+        with submodule_data_length=0.
+        """
+        dd = blocks.ExpectedSubmoduleDataDescription(1, 0, 1, 1)
+        sm = blocks.ExpectedSubmodule(
+            subslot_number=1,
+            submodule_ident_number=0x00000001,
+            submodule_properties=0x0000,  # NO_IO
+            data_descriptions=[dd],
+        )
+        data = sm.to_bytes()
+        # H(2) + I(4) + H(2) + DD(6) = 14
+        assert len(data) == 14
+
 
 class TestExpectedSubmoduleAPI:
     """Tests for ExpectedSubmoduleAPI."""
@@ -1079,11 +1096,19 @@ class TestExpectedSubmoduleBlockReq:
         assert blocks.ExpectedSubmoduleBlockReq.BLOCK_TYPE == 0x0104
 
     def test_add_submodule_no_io(self):
-        """Test adding NO_IO submodule."""
+        """Test adding NO_IO submodule has 1 Input DataDescription with data_length=0.
+
+        Per p-net reference, the device always reads at least 1 DataDescription
+        even for NO_IO submodules.
+        """
         builder = blocks.ExpectedSubmoduleBlockReq()
         builder.add_submodule(0, 0, 1, 0x00010001, 0x00000001, submodule_type=0)
         assert len(builder.apis) == 1
         assert len(builder.apis[0].submodules) == 1
+        assert len(builder.apis[0].submodules[0].data_descriptions) == 1
+        dd = builder.apis[0].submodules[0].data_descriptions[0]
+        assert dd.data_description == 1  # Input
+        assert dd.submodule_data_length == 0  # No data for NO_IO
 
     def test_add_submodule_input(self):
         """Test adding INPUT submodule creates input data description."""
