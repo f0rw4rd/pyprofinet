@@ -192,10 +192,19 @@ class CyclicController:
         cycle_ms = self.output_iocr.cycle_time_ms
 
         if cycle_ms < 1:
-            logger.error(f"Cycle {cycle_ms:.2f}ms too fast - Python can't do <1ms!")
+            raise ValueError(
+                f"Cycle time {cycle_ms:.2f}ms is below 1ms — not achievable in "
+                f"Python. Use a C/FPGA-based controller for sub-millisecond cycles."
+            )
         elif cycle_ms < PYTHON_MIN_CYCLE_MS:
-            logger.warning(
-                f"Cycle {cycle_ms:.0f}ms may cause jitter (use {PYTHON_MIN_CYCLE_MS}ms+)"
+            import warnings
+
+            warnings.warn(
+                f"Cycle time {cycle_ms:.0f}ms is below the recommended "
+                f"{PYTHON_MIN_CYCLE_MS}ms minimum for Python. "
+                f"Expect jitter and missed frames. "
+                f"Use {PYTHON_RECOMMENDED_CYCLE_MS}ms+ for reliable operation.",
+                stacklevel=3,
             )
 
     def set_output_data(self, slot: int, subslot: int, data: bytes) -> None:
