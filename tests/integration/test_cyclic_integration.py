@@ -25,10 +25,7 @@ from profinet import (
 )
 from profinet.cyclic import CyclicController
 from profinet.rt import (
-    IOCR_TYPE_INPUT,
-    IOCR_TYPE_OUTPUT,
-    IOCRConfig,
-    IODataObject,
+    build_iocr_configs,
 )
 
 from .conftest import (
@@ -67,89 +64,7 @@ RUN_DURATION = 5  # seconds
 _lifecycle_state: dict = {}
 
 
-# ---------------------------------------------------------------------------
-# Helper: build IOCRConfig objects matching _build_iocr_block frame layout
-# ---------------------------------------------------------------------------
-
-
-def build_iocr_configs(iocr_slots, input_frame_id, output_frame_id):
-    """Build IOCRConfig objects for CyclicController.
-
-    Computes frame offsets matching what RPCCon._build_iocr_block builds,
-    including IOCS entries for submodules without data in each direction.
-
-    Returns:
-        (input_iocr, output_iocr, output_iocs_offsets)
-        where output_iocs_offsets is a list of (slot, subslot, offset)
-        for manual IOCS setting in the output frame.
-    """
-    # Input IOCR: device -> controller
-    input_objects = []
-    frame_offset = 0
-    for s in iocr_slots:
-        if s.input_length > 0:
-            input_objects.append(
-                IODataObject(
-                    slot=s.slot,
-                    subslot=s.subslot,
-                    frame_offset=frame_offset,
-                    data_length=s.input_length,
-                    iops_offset=frame_offset + s.input_length,
-                )
-            )
-            frame_offset += s.input_length + 1  # data + IOPS
-
-    # IOCS entries for slots with no input data
-    for s in iocr_slots:
-        if s.input_length == 0:
-            frame_offset += 1
-
-    input_iocr = IOCRConfig(
-        iocr_type=IOCR_TYPE_INPUT,
-        iocr_reference=1,
-        frame_id=input_frame_id,
-        send_clock_factor=SEND_CLOCK_FACTOR,
-        reduction_ratio=REDUCTION_RATIO,
-        watchdog_factor=WATCHDOG_FACTOR,
-        data_length=max(40, frame_offset),
-        objects=input_objects,
-    )
-
-    # Output IOCR: controller -> device
-    output_objects = []
-    frame_offset = 0
-    for s in iocr_slots:
-        if s.output_length > 0:
-            output_objects.append(
-                IODataObject(
-                    slot=s.slot,
-                    subslot=s.subslot,
-                    frame_offset=frame_offset,
-                    data_length=s.output_length,
-                    iops_offset=frame_offset + s.output_length,
-                )
-            )
-            frame_offset += s.output_length + 1  # data + IOPS
-
-    # IOCS entries for slots with no output data
-    output_iocs_offsets = []
-    for s in iocr_slots:
-        if s.output_length == 0:
-            output_iocs_offsets.append((s.slot, s.subslot, frame_offset))
-            frame_offset += 1
-
-    output_iocr = IOCRConfig(
-        iocr_type=IOCR_TYPE_OUTPUT,
-        iocr_reference=2,
-        frame_id=output_frame_id,
-        send_clock_factor=SEND_CLOCK_FACTOR,
-        reduction_ratio=REDUCTION_RATIO,
-        watchdog_factor=WATCHDOG_FACTOR,
-        data_length=max(40, frame_offset),
-        objects=output_objects,
-    )
-
-    return input_iocr, output_iocr, output_iocs_offsets
+# build_iocr_configs is now imported from profinet.rt (CQ-7 deduplication)
 
 
 # ---------------------------------------------------------------------------
@@ -302,10 +217,13 @@ class TestCyclicLifecycle:
         # 4. Build IOCRConfigs and start CyclicController
         dst_mac = bytes.fromhex(info.mac.replace(":", ""))
 
-        input_iocr, output_iocr, _out_iocs = build_iocr_configs(
+        input_iocr, output_iocr = build_iocr_configs(
             iocr_setup.slots,
             result.input_frame_id,
             result.output_frame_id,
+            send_clock_factor=SEND_CLOCK_FACTOR,
+            reduction_ratio=REDUCTION_RATIO,
+            watchdog_factor=WATCHDOG_FACTOR,
         )
 
         cyclic = CyclicController(

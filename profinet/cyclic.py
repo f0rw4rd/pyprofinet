@@ -49,7 +49,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 from .rt import (
@@ -105,6 +105,11 @@ class CyclicStats:
     """Statistics for cyclic communication.
 
     Tracks frame counts, timing, and errors.
+
+    Note: These counters are mutated from multiple threads (TX and RX)
+    without explicit synchronization. Under CPython's GIL, individual
+    integer increments are atomic, and these are advisory statistics
+    where occasional stale reads are acceptable. No lock is needed.
     """
 
     frames_sent: int = 0
@@ -137,8 +142,13 @@ class CyclicStats:
     max_cycle_time_us: int = 0
     """Maximum observed cycle time (microseconds)."""
 
-    last_receive_time: float = 0.0
-    """Timestamp of last received frame (time.perf_counter)."""
+    last_receive_time: float = field(default_factory=time.perf_counter)
+    """Timestamp of last received frame (time.perf_counter).
+
+    Initialized to current time to avoid spurious watchdog timeout
+    on first check (BUG-7: perf_counter() returns time since boot,
+    so 0.0 would always look like a timeout).
+    """
 
     consecutive_timeouts: int = 0
     """Current streak of consecutive watchdog timeouts."""
@@ -152,7 +162,11 @@ class CyclicStats:
         return self._cycle_time_sum_us // self._cycle_count if self._cycle_count else 0
 
     def reset(self) -> None:
-        """Reset all statistics to zero."""
+        """Reset all statistics.
+
+        Resets counters to zero and sets last_receive_time to current
+        time to avoid spurious watchdog timeout on restart.
+        """
         self.frames_sent = 0
         self.frames_received = 0
         self.frames_missed = 0
@@ -163,6 +177,7 @@ class CyclicStats:
         self.max_jitter_us = 0
         self.min_cycle_time_us = 2**31
         self.max_cycle_time_us = 0
+        self.last_receive_time = time.perf_counter()
         self.consecutive_timeouts = 0
         self._cycle_time_sum_us = 0
         self._cycle_count = 0
@@ -237,6 +252,11 @@ class CyclicController:
         Warns:
             If cycle time is below recommended minimum for Python.
         """
+        if max_consecutive_timeouts < 0:
+            raise ValueError(
+                f"max_consecutive_timeouts must be >= 0, got {max_consecutive_timeouts}"
+            )
+
         self.interface = interface
         self.src_mac = src_mac
         self.dst_mac = dst_mac
@@ -265,6 +285,9 @@ class CyclicController:
         # send_clock_factor * reduction_ratio per frame
         self._last_rx_cycle_counter: Optional[int] = None
         self._rx_counter_step = input_iocr.send_clock_factor * input_iocr.reduction_ratio
+
+        # TX cycle counter step (PROTO-1: must match SCF * RR, not +1)
+        self._tx_counter_step = output_iocr.send_clock_factor * output_iocr.reduction_ratio
 
         # Check and warn about cycle time
         self._check_cycle_time()
@@ -452,31 +475,42 @@ class CyclicController:
 
         Sends STOP frames (DataStatus with ProviderRun cleared) to let the
         device enter safe state, then stops threads and closes sockets.
+
+        Order of operations (BUG-1 fix):
+        1. Set _running = False so TX loop exits
+        2. Wait for TX thread to finish (no more concurrent socket access)
+        3. Send STOP frames on the now-uncontended TX socket
+        4. Close RX socket to unblock recv, wait for RX thread
+        5. Close TX socket and clean up
         """
         if not self._running:
             return
 
         self._transition(CyclicState.STOPPING)
 
-        # Send STOP frames before shutting down
-        self._send_stop_frames()
-
+        # 1. Signal threads to exit BEFORE sending stop frames
         self._running = False
 
-        # Close RX socket to unblock recv
+        # 2. Wait for TX thread to finish first -- ensures no concurrent
+        #    socket access or cycle counter mutation during stop frames
+        if self._tx_thread and self._tx_thread.is_alive():
+            self._tx_thread.join(timeout=2.0)
+
+        # 3. Send STOP frames after TX thread has exited
+        self._send_stop_frames()
+
+        # 4. Close RX socket to unblock recv
         if self._rx_sock:
             try:
                 self._rx_sock.close()
             except OSError:
                 pass
 
-        # Wait for threads
-        if self._tx_thread and self._tx_thread.is_alive():
-            self._tx_thread.join(timeout=2.0)
+        # Wait for RX thread
         if self._rx_thread and self._rx_thread.is_alive():
             self._rx_thread.join(timeout=2.0)
 
-        # Close TX socket after thread stopped
+        # 5. Close TX socket after stop frames sent
         if self._tx_sock:
             try:
                 self._tx_sock.close()
@@ -588,7 +622,7 @@ class CyclicController:
             data_status: Override data status byte. If None, uses normal
                          RUN status.
         """
-        self._cycle_counter = (self._cycle_counter + 1) & 0xFFFF
+        self._cycle_counter = (self._cycle_counter + self._tx_counter_step) & 0xFFFF
 
         # Build payload from send buffer (lock-free after swap)
         payload = self._output_builder.build()

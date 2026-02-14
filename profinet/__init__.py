@@ -261,6 +261,7 @@ from .rt import (
     IOCRConfig,
     IODataObject,
     RTFrame,
+    build_iocr_configs,
 )
 from .util import (
     ethernet_socket,
@@ -278,7 +279,7 @@ from .vendors import (
     profinet_vendor_map,
 )
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
 __all__ = [
     # Protocol structures
     "EthernetHeader",
@@ -474,6 +475,7 @@ __all__ = [
     "RT_CLASS_1",
     "IOXS_GOOD",
     "IOXS_BAD",
+    "build_iocr_configs",
     # GSDML parser
     "GSDMLDevice",
     "GSDMLModule",

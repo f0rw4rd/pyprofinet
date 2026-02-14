@@ -45,12 +45,7 @@ from profinet import (
     get_station_info,
 )
 from profinet.cyclic import CyclicController
-from profinet.rt import (
-    IOCR_TYPE_INPUT,
-    IOCR_TYPE_OUTPUT,
-    IOCRConfig,
-    IODataObject,
-)
+from profinet.rt import build_iocr_configs
 
 # Device configuration
 DEVICE = os.environ.get("PROFINET_DEVICE", "test-pn-device")
@@ -117,79 +112,6 @@ def detect_container_bridge():
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
     return "eth0"
-
-
-def build_iocr_configs(iocr_slots, input_frame_id, output_frame_id, setup):
-    """Build IOCRConfig objects for CyclicController.
-
-    Computes frame offsets matching what RPCCon._build_iocr_block builds,
-    including IOCS entries for submodules without data in each direction.
-    """
-    # Input IOCR: device -> controller
-    input_objects = []
-    frame_offset = 0
-    for s in iocr_slots:
-        if s.input_length > 0:
-            input_objects.append(
-                IODataObject(
-                    slot=s.slot,
-                    subslot=s.subslot,
-                    frame_offset=frame_offset,
-                    data_length=s.input_length,
-                    iops_offset=frame_offset + s.input_length,
-                )
-            )
-            frame_offset += s.input_length + 1  # data + IOPS
-
-    # IOCS entries for slots with no input data
-    for s in iocr_slots:
-        if s.input_length == 0:
-            frame_offset += 1
-
-    input_iocr = IOCRConfig(
-        iocr_type=IOCR_TYPE_INPUT,
-        iocr_reference=1,
-        frame_id=input_frame_id,
-        send_clock_factor=setup.send_clock_factor,
-        reduction_ratio=setup.reduction_ratio,
-        watchdog_factor=setup.watchdog_factor,
-        data_length=max(40, frame_offset),
-        objects=input_objects,
-    )
-
-    # Output IOCR: controller -> device
-    output_objects = []
-    frame_offset = 0
-    for s in iocr_slots:
-        if s.output_length > 0:
-            output_objects.append(
-                IODataObject(
-                    slot=s.slot,
-                    subslot=s.subslot,
-                    frame_offset=frame_offset,
-                    data_length=s.output_length,
-                    iops_offset=frame_offset + s.output_length,
-                )
-            )
-            frame_offset += s.output_length + 1  # data + IOPS
-
-    # IOCS entries for slots with no output data
-    for s in iocr_slots:
-        if s.output_length == 0:
-            frame_offset += 1
-
-    output_iocr = IOCRConfig(
-        iocr_type=IOCR_TYPE_OUTPUT,
-        iocr_reference=2,
-        frame_id=output_frame_id,
-        send_clock_factor=setup.send_clock_factor,
-        reduction_ratio=setup.reduction_ratio,
-        watchdog_factor=setup.watchdog_factor,
-        data_length=max(40, frame_offset),
-        objects=output_objects,
-    )
-
-    return input_iocr, output_iocr
 
 
 def main():
@@ -312,7 +234,9 @@ def main():
         iocr_setup.slots,
         result.input_frame_id,
         result.output_frame_id,
-        iocr_setup,
+        send_clock_factor=iocr_setup.send_clock_factor,
+        reduction_ratio=iocr_setup.reduction_ratio,
+        watchdog_factor=iocr_setup.watchdog_factor,
     )
 
     cyclic = CyclicController(

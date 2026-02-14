@@ -1,5 +1,6 @@
 """Tests for profinet.cyclic module (Cyclic IO Controller)."""
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -347,12 +348,34 @@ class TestWatchdogBehavior:
         assert ctrl.state == CyclicState.RUNNING  # never goes to FAULT
 
     def test_consecutive_timeouts_reset_on_rx(self):
-        """Receiving a frame resets the consecutive timeout counter."""
+        """Receiving a frame resets the consecutive timeout counter.
+
+        Calls _process_input_frame to verify the counter actually resets,
+        rather than directly setting the field (which would be tautological).
+        """
         ctrl = make_controller()
         ctrl._state = CyclicState.RUNNING
         ctrl.stats.consecutive_timeouts = 2
-        # Simulate receiving a valid frame by directly updating
-        ctrl.stats.consecutive_timeouts = 0
+
+        # Build a valid input frame from the device
+        from profinet.rt import _ETHERTYPE_PROFINET_BYTES, RTFrame
+
+        payload = b"\x01\x02\x03\x04\x80" + b"\x00" * 35
+        data_status = (
+            DATA_STATUS_VALID
+            | DATA_STATUS_PROVIDER_RUN
+            | DATA_STATUS_STATION_OK
+            | DATA_STATUS_STATE
+        )
+        frame = RTFrame(
+            frame_id=ctrl.input_iocr.frame_id,
+            cycle_counter=1,
+            data_status=data_status,
+            transfer_status=0x00,
+            payload=payload,
+        )
+        eth_frame = ctrl.src_mac + ctrl.dst_mac + _ETHERTYPE_PROFINET_BYTES + frame.to_bytes()
+        ctrl._process_input_frame(eth_frame)
         assert ctrl.stats.consecutive_timeouts == 0
 
 
@@ -522,3 +545,277 @@ class TestCyclicControllerMisc:
         with ctrl:
             pass
         ctrl.stop.assert_called_once()
+
+    def test_negative_max_consecutive_timeouts_raises(self):
+        """Negative max_consecutive_timeouts should raise ValueError (CQ-5)."""
+        with pytest.raises(ValueError, match="max_consecutive_timeouts"):
+            make_controller(max_consecutive_timeouts=-1)
+
+
+# =============================================================================
+# BUG-1: Stop race condition
+# =============================================================================
+
+
+class TestStopRaceCondition:
+    """Test that stop() sets _running=False before sending stop frames (BUG-1)."""
+
+    def test_stop_sets_running_false_before_stop_frames(self):
+        """_running must be False before _send_stop_frames runs.
+
+        This ensures the TX thread exits before stop frames are sent,
+        avoiding concurrent socket access and cycle counter mutation.
+        """
+        ctrl = make_controller()
+        # Simulate a running state without actual threads/sockets
+        ctrl._running = True
+        ctrl._state = CyclicState.RUNNING
+        ctrl._tx_sock = MagicMock()
+        ctrl._rx_sock = MagicMock()
+        ctrl._tx_thread = MagicMock()
+        ctrl._tx_thread.is_alive.return_value = False
+        ctrl._rx_thread = MagicMock()
+        ctrl._rx_thread.is_alive.return_value = False
+
+        # Track ordering: when was _running set to False vs _send_stop_frames called
+        events = []
+
+        def patched_send_stop():
+            events.append(("send_stop", ctrl._running))
+            # Don't actually send frames
+            return
+
+        ctrl._send_stop_frames = patched_send_stop
+        ctrl.stop()
+
+        # _running should have been False when _send_stop_frames was called
+        assert len(events) == 1
+        assert events[0] == ("send_stop", False), (
+            "BUG-1: _send_stop_frames was called while _running was still True"
+        )
+
+
+# =============================================================================
+# PROTO-1: TX cycle counter step
+# =============================================================================
+
+
+class TestTXCounterStep:
+    """Test that TX cycle counter increments by SCF*RR (PROTO-1)."""
+
+    def test_tx_counter_step_computed(self):
+        """Controller should compute _tx_counter_step from output IOCR."""
+        ctrl = make_controller(
+            output_iocr=make_output_iocr(send_clock_factor=32, reduction_ratio=32),
+        )
+        assert hasattr(ctrl, "_tx_counter_step")
+        assert ctrl._tx_counter_step == 32 * 32  # 1024
+
+    def test_send_output_frame_increments_by_step(self):
+        """Each call to _send_output_frame should increment counter by step, not 1."""
+        ctrl = make_controller(
+            output_iocr=make_output_iocr(send_clock_factor=32, reduction_ratio=32),
+        )
+        ctrl._tx_sock = MagicMock()
+        ctrl._output_builder.swap()
+
+        step = 32 * 32  # 1024
+        ctrl._send_output_frame()
+        assert ctrl._cycle_counter == step
+
+        ctrl._send_output_frame()
+        assert ctrl._cycle_counter == step * 2
+
+    def test_tx_counter_wraps_at_16_bits(self):
+        """TX counter wraps correctly at 0xFFFF."""
+        ctrl = make_controller(
+            output_iocr=make_output_iocr(send_clock_factor=32, reduction_ratio=32),
+        )
+        ctrl._tx_sock = MagicMock()
+        ctrl._output_builder.swap()
+
+        step = 32 * 32  # 1024
+        # Set counter near wrap point: 0xFC00 + 1024 = 0x10000 -> wraps to 0x0000
+        ctrl._cycle_counter = 0xFFFF - step + 1  # 0xFC00
+        ctrl._send_output_frame()
+        assert ctrl._cycle_counter == 0x0000
+
+        # One more step lands at 1024
+        ctrl._send_output_frame()
+        assert ctrl._cycle_counter == step
+
+
+# =============================================================================
+# BUG-7: reset() last_receive_time
+# =============================================================================
+
+
+class TestStatsResetLastReceiveTime:
+    """Test that reset() initializes last_receive_time properly (BUG-7)."""
+
+    def test_reset_sets_last_receive_time(self):
+        """After reset(), last_receive_time should be close to current time.
+
+        A value of 0.0 would cause spurious watchdog timeout since
+        perf_counter() returns time since boot.
+        """
+        stats = CyclicStats()
+        before = time.perf_counter()
+        stats.reset()
+        after = time.perf_counter()
+
+        # last_receive_time should be close to current time, not 0.0
+        assert stats.last_receive_time >= before
+        assert stats.last_receive_time <= after
+
+
+# =============================================================================
+# BUG-5: Version string
+# =============================================================================
+
+
+# =============================================================================
+# PROTO-2/3: IOCS offset computation
+# =============================================================================
+
+
+class TestBuildIOCRConfigs:
+    """Test the shared build_iocr_configs helper (PROTO-2/3, CQ-7)."""
+
+    def test_output_iocr_has_iocs_for_input_only_slots(self):
+        """Slots with input data but no output should have IOCS entries
+        in the output IOCR, so set_all_iocs() can acknowledge input.
+        """
+        from profinet.rt import IOXS_GOOD, CyclicDataBuilder, build_iocr_configs
+
+        # Simulate: slot 1 has only input (8B), slot 2 has only output (4B)
+        class FakeSlot:
+            def __init__(self, slot, subslot, input_length, output_length):
+                self.slot = slot
+                self.subslot = subslot
+                self.input_length = input_length
+                self.output_length = output_length
+
+        slots = [
+            FakeSlot(slot=1, subslot=1, input_length=8, output_length=0),
+            FakeSlot(slot=2, subslot=1, input_length=0, output_length=4),
+        ]
+
+        _in_iocr, out_iocr = build_iocr_configs(
+            slots,
+            0xC001,
+            0xC000,
+            send_clock_factor=32,
+            reduction_ratio=32,
+            watchdog_factor=3,
+        )
+
+        # Output IOCR should have 2 objects:
+        # - slot 2 subslot 1 (output data at offset 0, data_length=4, iops_offset=4)
+        # - slot 1 subslot 1 (IOCS only at offset 5, data_length=0, iocs_offset=5)
+        assert len(out_iocr.objects) == 2
+
+        data_obj = out_iocr.objects[0]
+        assert data_obj.slot == 2
+        assert data_obj.data_length == 4
+        assert data_obj.iops_offset == 4
+
+        iocs_obj = out_iocr.objects[1]
+        assert iocs_obj.slot == 1
+        assert iocs_obj.data_length == 0
+        assert iocs_obj.iocs_offset == 5  # after data(4) + IOPS(1)
+
+        # Verify CyclicDataBuilder.set_all_iocs actually writes the IOCS byte
+        builder = CyclicDataBuilder(out_iocr)
+        builder.set_all_iocs(IOXS_GOOD)
+        builder.swap()
+        payload = builder.build()
+        assert payload[5] == IOXS_GOOD
+
+    def test_set_all_iops_does_not_corrupt_data_via_iocs_objects(self):
+        """set_all_iops must NOT write to offset 0 for IOCS-only objects.
+
+        IOCS-only IODataObject entries have data_length=0 and iops_offset=0.
+        Writing IOPS to offset 0 would corrupt the first byte of real output
+        process data.
+        """
+        from profinet.rt import IOXS_GOOD, CyclicDataBuilder, build_iocr_configs
+
+        class FakeSlot:
+            def __init__(self, slot, subslot, input_length, output_length):
+                self.slot = slot
+                self.subslot = subslot
+                self.input_length = input_length
+                self.output_length = output_length
+
+        slots = [
+            FakeSlot(slot=1, subslot=1, input_length=8, output_length=0),  # IOCS-only
+            FakeSlot(slot=2, subslot=1, input_length=0, output_length=4),  # real data
+        ]
+
+        _in_iocr, out_iocr = build_iocr_configs(
+            slots,
+            0xC001,
+            0xC000,
+            send_clock_factor=32,
+            reduction_ratio=32,
+            watchdog_factor=3,
+        )
+
+        builder = CyclicDataBuilder(out_iocr)
+        # Set real output data for slot 2
+        builder.set_data(2, 1, b"\xaa\xbb\xcc\xdd")
+        # Now call set_all_iops -- this should NOT touch offset 0
+        builder.set_all_iops(IOXS_GOOD)
+        builder.swap()
+        payload = builder.build()
+
+        # Offset 0-3 should still be the real data, not 0x80
+        assert payload[0:4] == b"\xaa\xbb\xcc\xdd", (
+            f"set_all_iops corrupted output data: {payload[0:4].hex()}"
+        )
+        # Offset 4 should be IOPS for slot 2
+        assert payload[4] == IOXS_GOOD
+
+    def test_output_iocr_no_iocs_when_all_have_output(self):
+        """If all slots have output data, no extra IOCS-only entries needed."""
+        from profinet.rt import build_iocr_configs
+
+        class FakeSlot:
+            def __init__(self, slot, subslot, input_length, output_length):
+                self.slot = slot
+                self.subslot = subslot
+                self.input_length = input_length
+                self.output_length = output_length
+
+        slots = [
+            FakeSlot(slot=1, subslot=1, input_length=4, output_length=4),
+        ]
+
+        _in_iocr, out_iocr = build_iocr_configs(
+            slots,
+            0xC001,
+            0xC000,
+            send_clock_factor=32,
+            reduction_ratio=32,
+            watchdog_factor=3,
+        )
+
+        # Only 1 object for the actual data
+        assert len(out_iocr.objects) == 1
+        assert out_iocr.objects[0].data_length == 4
+
+
+# =============================================================================
+# BUG-5: Version string
+# =============================================================================
+
+
+class TestVersion:
+    """Test version string matches pyproject.toml."""
+
+    def test_version_is_0_6_0(self):
+        """__version__ should be 0.6.0 for this release."""
+        import profinet
+
+        assert profinet.__version__ == "0.6.0"
