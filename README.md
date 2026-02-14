@@ -7,7 +7,7 @@ A Python library for PROFINET IO communication, acting as an IO-Controller.
 - **DCP Discovery & Configuration**: Find devices, set IP/name, signal LEDs, factory reset with full SET response validation
 - **DCE/RPC Communication**: Establish Application Relationships (AR) and perform acyclic read/write via slot/subslot/index
 - **I&M Records**: Read/write Identification & Maintenance data (IM0-IM5)
-- **Cyclic I/O**: Real-time periodic data exchange (RT_CLASS_1)
+- **Cyclic I/O**: Real-time periodic data exchange (RT_CLASS_1) with state machine, double-buffered IO, cycle counter tracking, watchdog fault detection, and graceful shutdown
 - **Alarm Handling**: Background alarm listener per IEC 61158-6-10
 - **Diagnosis Parsing**: Channel, extended channel, and qualified channel diagnosis decoding
 - **Vendor Registry**: 2100+ PROFINET vendor IDs with name lookup
@@ -118,11 +118,11 @@ This project is a modernized fork of the original PROFINET library by **Alfred K
 - DCP SET operations now validate response block error codes instead of silently succeeding
 - Diagnosis parsing module with channel/extended/qualified channel support
 - Alarm notification parsing and background alarm listener
-- Cyclic I/O controller for RT_CLASS_1 periodic data exchange
-- High-level `ProfinetDevice` API and `scan()`/`scan_dict()` convenience functions
+- Cyclic I/O controller for RT_CLASS_1 periodic data exchange with explicit state machine (`IDLE → RUNNING → STOPPING → STOPPED`, `FAULT`), double-buffered output data, per-frame cycle counter tracking (gap/duplicate/out-of-order detection), watchdog with automatic fault transition, IOCS consumer status handling, graceful stop (RUN→STOP frames), and separate TX/RX sockets
+- High-level `ProfinetDevice` API with `start_cyclic()` for integrated cyclic IO, plus `scan()`/`scan_dict()` convenience functions
 - 2100+ vendor ID registry with lookup
 - CLI tool for discovery, I&M reading, and raw record access
-- 570+ unit tests, 150+ Docker-based integration tests against p-net device emulator
+- 700+ unit tests, Docker-based integration tests against p-net device emulator
 - Type hints, ruff linting, mypy checking
 
 ## Support

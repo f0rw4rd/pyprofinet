@@ -31,6 +31,13 @@ COPY profinet/app_gsdml_pnmock.h /p-net/samples/pn_dev/app_gsdml.h
 RUN sed -i 's/if (ar_type == PF_ART_IOCAR_SINGLE)/if ((ar_type == PF_ART_IOCAR_SINGLE) || (ar_type == PF_ART_IOSAR))/' \
     /p-net/src/device/pf_cmdev.c
 
+# Skip Ethernet port speed check (pf_cmdev_check_pdev).
+# veth interfaces report 10 Gbps which p-net doesn't map to a valid
+# PROFINET MAU type. This patch makes the check always pass so we can
+# run on veth pairs (container <-> host integration tests).
+RUN sed -i 's/return (pf_pdport_is_a_fast_port_in_use (net)) ? 0 : -1;/return 0; \/\* patched: skip speed check for veth *\//' \
+    /p-net/src/device/pf_cmdev.c
+
 # Relax compiler warnings - p-net uses -Werror which can break on newer GCC
 RUN find /p-net -type f \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
     -exec sed -i 's/-Werror//g' {} \;

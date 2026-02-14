@@ -150,7 +150,8 @@ def demo_cyclic_data_builder():
     builder.set_iops(2, 1, IOXS_GOOD)
     print(f"Set slot 2 data: {data2.hex()}")
 
-    # Build payload
+    # Swap write buffer to send buffer, then build payload
+    builder.swap()
     payload = builder.build()
     print(f"\nBuilt C_SDU payload ({len(payload)} bytes):")
     print(f"  Offset 0-7 (slot 1 data): {payload[0:8].hex()}")

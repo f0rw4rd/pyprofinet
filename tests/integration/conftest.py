@@ -89,6 +89,35 @@ def _interface_exists(iface: str) -> bool:
         return False
 
 
+def _detect_container_bridge() -> str:
+    """Detect the Docker bridge interface for the profinet-test-device container.
+
+    When the container uses a custom Docker bridge network, returns the
+    host-side bridge interface name (br-<id>). Falls back to 'eth0'.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}",
+                "profinet-test-device",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        network_id = result.stdout.strip()
+        if network_id:
+            bridge_name = f"br-{network_id[:12]}"
+            if _interface_exists(bridge_name):
+                return bridge_name
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return "eth0"
+
+
 skip_not_root = pytest.mark.skipif(
     not _is_root(),
     reason="Requires root (raw sockets need CAP_NET_RAW)",
@@ -107,8 +136,14 @@ skip_no_container = pytest.mark.skipif(
 
 @pytest.fixture(scope="session")
 def interface() -> str:
-    """Network interface name for integration tests."""
-    iface = os.environ.get("PROFINET_TEST_IFACE", "eth0")
+    """Network interface name for integration tests.
+
+    Auto-detects the Docker bridge interface when PROFINET_TEST_IFACE
+    is not set and the container uses bridge networking.
+    """
+    iface = os.environ.get("PROFINET_TEST_IFACE")
+    if iface is None:
+        iface = _detect_container_bridge()
     if not _interface_exists(iface):
         pytest.skip(f"Network interface '{iface}' not found")
     return iface

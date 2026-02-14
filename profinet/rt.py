@@ -15,6 +15,7 @@ Per IEC 61158-6-10:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -301,10 +302,14 @@ class RTFrame:
 
 
 class CyclicDataBuilder:
-    """Builds C_SDU payload from IO data objects.
+    """Builds C_SDU payload from IO data objects with double-buffering.
 
-    Helper class to construct properly formatted cyclic
-    data payloads with process data and IOxS bytes.
+    Uses two buffers for lock-free reads by the TX thread:
+    - _write_buffer: application thread writes here via set_data()
+    - _send_buffer: TX thread reads here via build()
+
+    The swap() method atomically promotes the write buffer to send buffer.
+    This minimizes lock contention between application and TX threads.
 
     Example:
         >>> config = IOCRConfig(
@@ -317,7 +322,8 @@ class CyclicDataBuilder:
         >>> builder = CyclicDataBuilder(config)
         >>> builder.set_data(1, 1, b"\\x11\\x22\\x33\\x44\\x55\\x66\\x77\\x88")
         >>> builder.set_iops(1, 1, IOXS_GOOD)
-        >>> payload = builder.build()
+        >>> builder.swap()  # promote to send buffer
+        >>> payload = builder.build()  # reads from send buffer
     """
 
     def __init__(self, config: IOCRConfig):
@@ -327,10 +333,15 @@ class CyclicDataBuilder:
             config: IOCRConfig with data length and object mappings
         """
         self.config = config
-        self._buffer = bytearray(config.data_length)
+        self._write_buffer = bytearray(config.data_length)
+        self._send_buffer = bytearray(config.data_length)
+        self._write_lock = threading.Lock()
+        self._dirty = False
 
     def set_data(self, slot: int, subslot: int, data: bytes) -> None:
         """Set process data for a slot/subslot.
+
+        Thread-safe. Writes to the write buffer.
 
         Args:
             slot: Slot number
@@ -343,12 +354,14 @@ class CyclicDataBuilder:
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
                 end = obj.frame_offset + min(len(data), obj.data_length)
-                self._buffer[obj.frame_offset : end] = data[: obj.data_length]
+                with self._write_lock:
+                    self._write_buffer[obj.frame_offset : end] = data[: obj.data_length]
+                    self._dirty = True
                 return
         raise ValueError(f"Unknown slot/subslot: {slot}/{subslot}")
 
     def get_data(self, slot: int, subslot: int) -> bytes:
-        """Get process data for a slot/subslot.
+        """Get process data for a slot/subslot from write buffer.
 
         Args:
             slot: Slot number
@@ -362,7 +375,10 @@ class CyclicDataBuilder:
         """
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
-                return bytes(self._buffer[obj.frame_offset : obj.frame_offset + obj.data_length])
+                with self._write_lock:
+                    return bytes(
+                        self._write_buffer[obj.frame_offset : obj.frame_offset + obj.data_length]
+                    )
         raise ValueError(f"Unknown slot/subslot: {slot}/{subslot}")
 
     def set_iops(self, slot: int, subslot: int, status: int = IOXS_GOOD) -> None:
@@ -375,7 +391,9 @@ class CyclicDataBuilder:
         """
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
-                self._buffer[obj.iops_offset] = status
+                with self._write_lock:
+                    self._write_buffer[obj.iops_offset] = status
+                    self._dirty = True
                 return
 
     def set_iocs(self, slot: int, subslot: int, status: int = IOXS_GOOD) -> None:
@@ -389,7 +407,9 @@ class CyclicDataBuilder:
         for obj in self.config.objects:
             if obj.slot == slot and obj.subslot == subslot:
                 if obj.iocs_offset > 0:
-                    self._buffer[obj.iocs_offset] = status
+                    with self._write_lock:
+                        self._write_buffer[obj.iocs_offset] = status
+                        self._dirty = True
                 return
 
     def set_all_iops(self, status: int = IOXS_GOOD) -> None:
@@ -398,30 +418,62 @@ class CyclicDataBuilder:
         Args:
             status: IOPS value for all objects
         """
-        for obj in self.config.objects:
-            self._buffer[obj.iops_offset] = status
+        with self._write_lock:
+            for obj in self.config.objects:
+                self._write_buffer[obj.iops_offset] = status
+            self._dirty = True
+
+    def set_all_iocs(self, status: int = IOXS_GOOD) -> None:
+        """Set IOCS for all objects that have iocs_offset.
+
+        Args:
+            status: IOCS value for all objects
+        """
+        with self._write_lock:
+            for obj in self.config.objects:
+                if obj.iocs_offset > 0:
+                    self._write_buffer[obj.iocs_offset] = status
+            self._dirty = True
 
     def clear(self) -> None:
         """Clear all data to zeros."""
-        for i in range(len(self._buffer)):
-            self._buffer[i] = 0
+        with self._write_lock:
+            for i in range(len(self._write_buffer)):
+                self._write_buffer[i] = 0
+            self._dirty = True
+
+    def swap(self) -> None:
+        """Swap write buffer into send buffer.
+
+        Called by TX thread at the start of each cycle. Only copies
+        if the write buffer has been modified since last swap.
+        """
+        if self._dirty:
+            with self._write_lock:
+                self._send_buffer[:] = self._write_buffer
+                self._dirty = False
 
     def build(self) -> bytes:
-        """Build and return C_SDU payload.
+        """Build and return C_SDU payload from send buffer.
+
+        Lock-free - reads from the send buffer which is only
+        updated by swap() at the start of each TX cycle.
 
         Returns:
             Complete payload bytes
         """
-        return bytes(self._buffer)
+        return bytes(self._send_buffer)
 
     def load(self, payload: bytes) -> None:
-        """Load payload data into buffer.
+        """Load payload data into write buffer.
 
         Args:
             payload: Received payload bytes
         """
-        copy_len = min(len(payload), len(self._buffer))
-        self._buffer[:copy_len] = payload[:copy_len]
+        copy_len = min(len(payload), len(self._write_buffer))
+        with self._write_lock:
+            self._write_buffer[:copy_len] = payload[:copy_len]
+            self._dirty = True
 
 
 def build_ethernet_frame(

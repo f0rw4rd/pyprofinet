@@ -1,6 +1,8 @@
 """Tests for RPC module - data classes and parsing."""
 
+import struct as _struct
 import sys
+import time as _time
 from struct import pack
 from unittest.mock import MagicMock, patch
 
@@ -962,3 +964,218 @@ class TestEPMLookup:
 
         ep = EPMClass()
         assert ep.port == 0
+
+
+# ---------------------------------------------------------------------------
+# Helper: build a minimal valid PNRPCHeader in bytes
+# ---------------------------------------------------------------------------
+
+
+def _build_rpc_bytes(packet_type=0x02, operation_number=0x02, payload=b""):
+    """Build minimal valid PNRPCHeader bytes.
+
+    Default is a RESPONSE packet (type=0x02) for READ (op=0x02).
+    """
+    # PNRPCHeader fixed fields (big-endian, 80 bytes total):
+    #   version(B) packet_type(B) flags1(B) flags2(B) drep(3s) serial_high(B)
+    #   object_uuid(16s) interface_uuid(16s) activity_uuid(16s)
+    #   server_boot_time(I) interface_version(I) sequence_number(I)
+    #   operation_number(H) interface_hint(H) activity_hint(H)
+    #   length_of_body(H) fragment_number(H) auth_protocol(B) serial_low(B)
+    body_len = len(payload)
+    hdr = _struct.pack(
+        ">BB BB 3s B 16s 16s 16s III HHH HH BB",
+        0x04,  # version
+        packet_type,
+        0x00,  # flags1
+        0x00,  # flags2
+        b"\x00\x00\x00",  # drep (big-endian)
+        0x00,  # serial_high
+        b"\x00" * 16,  # object_uuid
+        b"\x00" * 16,  # interface_uuid
+        b"\x00" * 16,  # activity_uuid
+        0,  # server_boot_time
+        1,  # interface_version
+        0,  # sequence_number
+        operation_number,
+        0xFFFF,  # interface_hint
+        0xFFFF,  # activity_hint
+        body_len,  # length_of_body
+        0,  # fragment_number
+        0,  # auth_protocol
+        0,  # serial_low
+    )
+    return hdr + payload
+
+
+class TestSendReceiveEchoSkip:
+    """Test echo-skip logic in _send_receive."""
+
+    @pytest.fixture
+    def mock_rpc(self):
+        """Create RPCCon with mocked sockets."""
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.IP_ADDRESS: bytes([192, 168, 1, 100, 255, 255, 255, 0, 192, 168, 1, 1]),
+            PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
+        }
+        info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
+        with patch("profinet.rpc.socket"):
+            rpc = RPCCon(info, timeout=2.0)
+            yield rpc
+            rpc.close()
+
+    def test_echo_skip_returns_response(self, mock_rpc):
+        """REQUEST packet is skipped, RESPONSE packet is returned."""
+        from profinet.protocol import PNRPCHeader
+
+        request_bytes = _build_rpc_bytes(packet_type=PNRPCHeader.REQUEST)
+        response_bytes = _build_rpc_bytes(packet_type=PNRPCHeader.RESPONSE)
+
+        # recvfrom returns REQUEST first, then RESPONSE
+        mock_rpc._socket.recvfrom = MagicMock(
+            side_effect=[
+                (request_bytes, ("192.168.1.100", 34964)),
+                (response_bytes, ("192.168.1.100", 34964)),
+            ]
+        )
+        mock_rpc._socket.sendto = MagicMock()
+
+        # Build a minimal RPC request to pass to _send_receive
+        rpc_req = PNRPCHeader(
+            0x04,
+            PNRPCHeader.REQUEST,
+            0,
+            0,
+            b"\x00\x00\x00",
+            0,
+            b"\x00" * 16,
+            b"\x00" * 16,
+            b"\x00" * 16,
+            0,
+            1,
+            0,
+            PNRPCHeader.READ,
+            0xFFFF,
+            0xFFFF,
+            0,
+            0,
+            0,
+            0,
+            payload=b"",
+        )
+
+        result = mock_rpc._send_receive(rpc_req)
+        assert result.packet_type == PNRPCHeader.RESPONSE
+        # recvfrom was called twice (REQUEST skipped, RESPONSE returned)
+        assert mock_rpc._socket.recvfrom.call_count == 2
+
+    def test_echo_skip_timeout(self, mock_rpc):
+        """Only REQUEST packets arrive until deadline expires -> RPCTimeoutError."""
+        from profinet.exceptions import RPCTimeoutError
+        from profinet.protocol import PNRPCHeader
+
+        request_bytes = _build_rpc_bytes(packet_type=PNRPCHeader.REQUEST)
+
+        # Return REQUEST packets forever -- the deadline should stop the loop
+        mock_rpc._socket.recvfrom = MagicMock(
+            return_value=(request_bytes, ("192.168.1.100", 34964))
+        )
+        mock_rpc._socket.sendto = MagicMock()
+
+        # Use a very short timeout so the test runs fast
+        mock_rpc.timeout = 0.3
+
+        rpc_req = PNRPCHeader(
+            0x04,
+            PNRPCHeader.REQUEST,
+            0,
+            0,
+            b"\x00\x00\x00",
+            0,
+            b"\x00" * 16,
+            b"\x00" * 16,
+            b"\x00" * 16,
+            0,
+            1,
+            0,
+            PNRPCHeader.READ,
+            0xFFFF,
+            0xFFFF,
+            0,
+            0,
+            0,
+            0,
+            payload=b"",
+        )
+
+        start = _time.monotonic()
+        with pytest.raises(RPCTimeoutError):
+            mock_rpc._send_receive(rpc_req)
+        elapsed = _time.monotonic() - start
+
+        # Should have timed out within roughly the timeout period
+        assert elapsed < 2.0, f"Loop took too long: {elapsed:.1f}s"
+
+
+class TestCControlSocketLifecycle:
+    """Test CControl socket creation at init and cleanup at close."""
+
+    def test_ccontrol_socket_created_at_init(self):
+        """_ccontrol_socket is created and bound at init time."""
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.IP_ADDRESS: bytes([192, 168, 1, 100, 255, 255, 255, 0, 192, 168, 1, 1]),
+            PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
+        }
+        info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
+
+        with patch("profinet.rpc.socket") as mock_socket_cls:
+            mock_main = MagicMock()
+            mock_ccontrol = MagicMock()
+            # First call creates the main socket, second creates CControl
+            mock_socket_cls.side_effect = [mock_main, mock_ccontrol]
+
+            rpc = RPCCon(info)
+            assert rpc._ccontrol_socket is mock_ccontrol
+            mock_ccontrol.bind.assert_called_once_with(("", 0x8894))
+            rpc.close()
+
+    def test_ccontrol_socket_closed_on_close(self):
+        """_ccontrol_socket is closed when close() is called."""
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.IP_ADDRESS: bytes([192, 168, 1, 100, 255, 255, 255, 0, 192, 168, 1, 1]),
+            PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
+        }
+        info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
+
+        with patch("profinet.rpc.socket") as mock_socket_cls:
+            mock_main = MagicMock()
+            mock_ccontrol = MagicMock()
+            mock_socket_cls.side_effect = [mock_main, mock_ccontrol]
+
+            rpc = RPCCon(info)
+            assert rpc._ccontrol_socket is not None
+            rpc.close()
+            mock_ccontrol.close.assert_called_once()
+            assert rpc._ccontrol_socket is None
+
+    def test_ccontrol_socket_fallback_on_bind_failure(self):
+        """If bind fails at init, _ccontrol_socket is None (fallback)."""
+        blocks = {
+            PNDCPBlock.NAME_OF_STATION: b"test-device",
+            PNDCPBlock.IP_ADDRESS: bytes([192, 168, 1, 100, 255, 255, 255, 0, 192, 168, 1, 1]),
+            PNDCPBlock.DEVICE_ID: bytes([0x00, 0x2A, 0x00, 0x01]),
+        }
+        info = DCPDeviceDescription(b"\x00\x11\x22\x33\x44\x55", blocks)
+
+        with patch("profinet.rpc.socket") as mock_socket_cls:
+            mock_main = MagicMock()
+            mock_ccontrol = MagicMock()
+            mock_ccontrol.bind.side_effect = OSError("Address already in use")
+            mock_socket_cls.side_effect = [mock_main, mock_ccontrol]
+
+            rpc = RPCCon(info)
+            assert rpc._ccontrol_socket is None
+            rpc.close()

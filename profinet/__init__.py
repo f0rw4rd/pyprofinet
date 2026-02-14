@@ -70,6 +70,7 @@ from .blocks import (
 )
 from .cyclic import (
     CyclicController,
+    CyclicState,
     CyclicStats,
 )
 from .dcp import (
@@ -277,7 +278,7 @@ from .vendors import (
     profinet_vendor_map,
 )
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 __all__ = [
     # Protocol structures
     "EthernetHeader",
@@ -466,6 +467,7 @@ __all__ = [
     "IODataObject",
     "CyclicDataBuilder",
     "CyclicController",
+    "CyclicState",
     "CyclicStats",
     "IOCR_TYPE_INPUT",
     "IOCR_TYPE_OUTPUT",

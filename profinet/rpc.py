@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 from dataclasses import dataclass
 from datetime import datetime
 from socket import AF_INET, SOCK_DGRAM, socket
@@ -950,22 +951,26 @@ class RPCCon:
         self._iocr_setup: Optional[IOCRSetup] = None  # IOCR config if enabled
 
         # UDP socket for RPC with timeout.
-        # Bind to RPC_PORT (34964) so the device can send CControl
-        # (ApplicationReady) back to us on the well-known port.
+        # Uses an ephemeral port for regular request/response.
+        self._socket = socket(AF_INET, SOCK_DGRAM)
+        self._socket.settimeout(timeout)
+
+        # CControl/listener socket bound to the well-known RPC port (34964).
+        # Devices send CControl (ApplicationReady) to this port.
+        # Created early so the port is bound before the device needs it.
         import socket as _socket_mod
 
-        self._socket = socket(AF_INET, SOCK_DGRAM)
-        self._socket.setsockopt(_socket_mod.SOL_SOCKET, _socket_mod.SO_REUSEADDR, 1)
-        self._socket.settimeout(timeout)
+        self._ccontrol_socket: Optional[socket] = None
         try:
-            self._socket.bind(("", RPC_PORT))
-            logger.debug(f"RPC socket bound to port {RPC_PORT}")
+            s = socket(AF_INET, SOCK_DGRAM)
+            s.setsockopt(_socket_mod.SOL_SOCKET, _socket_mod.SO_REUSEADDR, 1)
+            s.bind(("", RPC_PORT))
+            self._ccontrol_socket = s
+            logger.debug(f"CControl socket bound to port {RPC_PORT} at init")
         except OSError as e:
-            # Port in use -- fall back to ephemeral port. CControl from
-            # the device may still arrive on the source port of our requests.
             logger.warning(
-                f"Could not bind to port {RPC_PORT} ({e}), "
-                f"using ephemeral port -- CControl may not be received"
+                f"Could not bind CControl socket to port {RPC_PORT}: {e}. "
+                f"Will retry in application_ready()."
             )
 
     def _create_rpc(self, operation: int, nrd: bytes) -> PNRPCHeader:
@@ -1310,25 +1315,47 @@ class RPCCon:
         logger.debug(f"RPC request ({len(rpc_bytes)} bytes): {rpc_bytes.hex(' ')}")
         self._socket.sendto(rpc_bytes, self.peer)
 
-        try:
-            data = self._socket.recvfrom(4096)[0]
-        except TimeoutError:
-            raise RPCTimeoutError(f"No response from {self.info.name} ({self.info.ip})") from None
-        except OSError as e:
-            raise RPCError(f"Socket error: {e}") from e
+        # Loop to skip non-response packets (e.g. our own request echoed back
+        # when sending to a local IP on host networking).
+        # Use a wall-clock deadline so continuous non-response packets
+        # cannot keep the loop alive indefinitely.
+        deadline = _time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                raise RPCTimeoutError(f"No response from {self.info.name} ({self.info.ip})")
+            self._socket.settimeout(remaining)
+            try:
+                data = self._socket.recvfrom(4096)[0]
+            except TimeoutError:
+                raise RPCTimeoutError(
+                    f"No response from {self.info.name} ({self.info.ip})"
+                ) from None
+            except OSError as e:
+                raise RPCError(f"Socket error: {e}") from e
+            finally:
+                # Restore original timeout for subsequent operations
+                self._socket.settimeout(self.timeout)
 
-        logger.debug(f"RPC response raw ({len(data)} bytes): {data[:100].hex(' ')}...")
+            logger.debug(f"RPC response raw ({len(data)} bytes): {data[:100].hex(' ')}...")
 
-        try:
-            rpc_resp = PNRPCHeader(data)
-        except ValueError as e:
-            raise RPCError(f"Failed to parse RPC response: {e}") from e
+            try:
+                rpc_resp = PNRPCHeader(data)
+            except ValueError as e:
+                raise RPCError(f"Failed to parse RPC response: {e}") from e
 
-        logger.debug(
-            f"RPC response parsed: type=0x{rpc_resp.packet_type:02X} "
-            f"op={rpc_resp.operation_number} body_len={rpc_resp.length_of_body} "
-            f"payload_len={len(rpc_resp.payload)}"
-        )
+            logger.debug(
+                f"RPC response parsed: type=0x{rpc_resp.packet_type:02X} "
+                f"op={rpc_resp.operation_number} body_len={rpc_resp.length_of_body} "
+                f"payload_len={len(rpc_resp.payload)}"
+            )
+
+            # Skip our own request echoed back (happens with local destination IP)
+            if rpc_resp.packet_type == PNRPCHeader.REQUEST:
+                logger.debug("Skipping echoed request packet")
+                continue
+
+            break
 
         # Validate response type
         if rpc_resp.packet_type == PNRPCHeader.FAULT:
@@ -3044,14 +3071,28 @@ class RPCCon:
 
         logger.info(f"Waiting up to {timeout:.0f}s for device CControl/ApplicationReady...")
 
-        # Temporarily set socket timeout for the wait
-        old_timeout = self._socket.gettimeout()
-        self._socket.settimeout(timeout)
+        # Use the pre-bound CControl socket if available, otherwise
+        # try to create one now as a fallback.
+        created_here = False
+        ccontrol_sock = self._ccontrol_socket
+        if ccontrol_sock is None:
+            import socket as _socket_mod
+
+            try:
+                ccontrol_sock = socket(AF_INET, SOCK_DGRAM)
+                ccontrol_sock.setsockopt(_socket_mod.SOL_SOCKET, _socket_mod.SO_REUSEADDR, 1)
+                ccontrol_sock.bind(("", RPC_PORT))
+                created_here = True
+                logger.debug(f"CControl socket bound to port {RPC_PORT} (fallback)")
+            except OSError as e:
+                raise RPCError(f"Cannot bind CControl socket to port {RPC_PORT}: {e}") from e
+
+        ccontrol_sock.settimeout(timeout)
 
         try:
             while True:
                 try:
-                    data, addr = self._socket.recvfrom(4096)
+                    data, addr = ccontrol_sock.recvfrom(4096)
                 except TimeoutError:
                     raise RPCTimeoutError(
                         f"No ApplicationReady from {self.info.name} "
@@ -3192,14 +3233,15 @@ class RPCCon:
                 # Send response back to the device
                 logger.info(f"Sending CControl response ({len(resp_bytes)} bytes) to {addr}")
                 logger.debug(f"CControl response: {resp_bytes.hex(' ')}")
-                self._socket.sendto(resp_bytes, addr)
+                ccontrol_sock.sendto(resp_bytes, addr)
 
                 logger.info("ApplicationReady confirmed (DONE)")
                 self.live = datetime.now()
                 return nrd_body
 
         finally:
-            self._socket.settimeout(old_timeout)
+            if created_here:
+                ccontrol_sock.close()
 
     def ready_for_rt_class_3(self) -> Optional[bytes]:
         """Send ReadyForRT_CLASS_3 control command.
@@ -3263,6 +3305,12 @@ class RPCCon:
             self._socket.close()
         except OSError:
             pass
+        if self._ccontrol_socket is not None:
+            try:
+                self._ccontrol_socket.close()
+            except OSError:
+                pass
+            self._ccontrol_socket = None
         logger.debug(f"Closed connection to {self.info.name}")
 
     def __enter__(self) -> RPCCon:

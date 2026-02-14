@@ -190,7 +190,7 @@ class TestIOCRConfig:
 
 
 class TestCyclicDataBuilder:
-    """Test CyclicDataBuilder payload construction."""
+    """Test CyclicDataBuilder payload construction with double-buffering."""
 
     def test_set_and_get_data(self):
         """Test setting and getting process data."""
@@ -224,6 +224,7 @@ class TestCyclicDataBuilder:
         )
         builder = CyclicDataBuilder(config)
         builder.set_iops(1, 1, IOXS_GOOD)
+        builder.swap()
         payload = builder.build()
 
         assert payload[4] == IOXS_GOOD
@@ -270,6 +271,7 @@ class TestCyclicDataBuilder:
         )
         builder = CyclicDataBuilder(config)
         builder.set_all_iops(IOXS_GOOD)
+        builder.swap()
         payload = builder.build()
 
         assert payload[4] == IOXS_GOOD
@@ -289,6 +291,7 @@ class TestCyclicDataBuilder:
         builder = CyclicDataBuilder(config)
         builder.set_data(1, 1, b"\xff" * 8)
         builder.clear()
+        builder.swap()
         payload = builder.build()
 
         assert payload == b"\x00" * 16
@@ -309,6 +312,97 @@ class TestCyclicDataBuilder:
         builder.load(received)
 
         assert builder.get_data(1, 1) == b"\x11\x22\x33\x44\x55\x66\x77\x88"
+
+    def test_double_buffer_isolation(self):
+        """Write buffer changes don't affect send buffer until swap."""
+        config = IOCRConfig(
+            iocr_type=IOCR_TYPE_OUTPUT,
+            iocr_reference=1,
+            frame_id=0xC000,
+            data_length=16,
+            objects=[
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=4, iops_offset=4),
+            ],
+        )
+        builder = CyclicDataBuilder(config)
+
+        # Set data and swap to initialize send buffer
+        builder.set_data(1, 1, b"\x01\x02\x03\x04")
+        builder.swap()
+
+        # Now write new data without swapping
+        builder.set_data(1, 1, b"\xaa\xbb\xcc\xdd")
+
+        # build() should still return old data from send buffer
+        payload = builder.build()
+        assert payload[0:4] == b"\x01\x02\x03\x04"
+
+        # After swap, build() returns new data
+        builder.swap()
+        payload = builder.build()
+        assert payload[0:4] == b"\xaa\xbb\xcc\xdd"
+
+    def test_swap_skips_when_not_dirty(self):
+        """Swap is a no-op when write buffer hasn't changed."""
+        config = IOCRConfig(
+            iocr_type=IOCR_TYPE_OUTPUT,
+            iocr_reference=1,
+            frame_id=0xC000,
+            data_length=16,
+            objects=[
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=4, iops_offset=4),
+            ],
+        )
+        builder = CyclicDataBuilder(config)
+        builder.set_data(1, 1, b"\x01\x02\x03\x04")
+        builder.swap()
+
+        # Dirty flag should be cleared
+        assert not builder._dirty
+
+        # Swap again should be no-op
+        builder.swap()
+        assert not builder._dirty
+
+    def test_concurrent_set_and_build(self):
+        """Concurrent writes and builds don't corrupt data."""
+        import threading
+
+        config = IOCRConfig(
+            iocr_type=IOCR_TYPE_OUTPUT,
+            iocr_reference=1,
+            frame_id=0xC000,
+            data_length=16,
+            objects=[
+                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=4, iops_offset=4),
+            ],
+        )
+        builder = CyclicDataBuilder(config)
+
+        errors = []
+        iterations = 1000
+
+        def writer():
+            for i in range(iterations):
+                val = (i & 0xFF).to_bytes(1, "big") * 4
+                builder.set_data(1, 1, val)
+
+        def reader():
+            for _ in range(iterations):
+                builder.swap()
+                payload = builder.build()
+                # All 4 bytes should be the same value (no partial writes)
+                if payload[0:4] != bytes([payload[0]]) * 4:
+                    errors.append(f"Inconsistent: {payload[0:4].hex()}")
+
+        t1 = threading.Thread(target=writer)
+        t2 = threading.Thread(target=reader)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert len(errors) == 0, f"Data corruption detected: {errors[:5]}"
 
 
 class TestEthernetFrameHelpers:

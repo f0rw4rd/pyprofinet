@@ -174,12 +174,18 @@ def scan_dict(interface: str = "eth0", timeout: float = 3.0) -> Dict[str, Device
     """
     result = {}
     for dev in scan(interface, timeout):
+        info = dev._info
         result[dev.name] = DeviceInfo(
             name=dev.name,
             ip=dev.ip,
             mac=dev.mac,
-            vendor_id=dev._info.vendor_id,
-            device_id=dev._info.device_id,
+            vendor_id=info.vendor_id,
+            device_id=info.device_id,
+            device_type=info.device_type,
+            netmask=info.netmask,
+            gateway=info.gateway,
+            device_roles=info.device_roles,
+            vendor_name=info.vendor_name,
         )
     return result
 
@@ -213,6 +219,11 @@ class DeviceInfo:
     mac: str = ""
     vendor_id: int = 0
     device_id: int = 0
+    device_type: str = ""
+    netmask: str = ""
+    gateway: str = ""
+    device_roles: Optional[List[str]] = None
+    vendor_name: str = ""
 
     # From I&M0 (optional)
     im0: Optional[PNInM0] = None
@@ -539,8 +550,13 @@ class ProfinetDevice:
             name=self._info.name,
             ip=self._info.ip,
             mac=self.mac,
-            vendor_id=(self._info.vendor_high << 8) | self._info.vendor_low,
-            device_id=(self._info.device_high << 8) | self._info.device_low,
+            vendor_id=self._info.vendor_id,
+            device_id=self._info.device_id,
+            device_type=self._info.device_type,
+            netmask=self._info.netmask,
+            gateway=self._info.gateway,
+            device_roles=self._info.device_roles,
+            vendor_name=self._info.vendor_name,
         )
 
         # Try to get I&M0
@@ -1046,6 +1062,154 @@ class ProfinetDevice:
     def alarm_listener_running(self) -> bool:
         """True if alarm listener is currently running."""
         return self._alarm_listener is not None and self._alarm_listener.is_running
+
+    # =========================================================================
+    # Cyclic IO
+    # =========================================================================
+
+    def start_cyclic(
+        self,
+        iocr_setup: Any,
+        max_consecutive_timeouts: int = 3,
+    ) -> Any:
+        """Start cyclic IO exchange with device.
+
+        Handles the full cyclic IO lifecycle:
+        1. Connect with IOCARSingle + IOCR + AlarmCR
+        2. PrmEnd (end parameter phase)
+        3. ApplicationReady (wait for device CControl)
+        4. Build IOCRConfigs from IOCRSetup
+        5. Create and start CyclicController
+
+        Args:
+            iocr_setup: IOCRSetup with slots, timing, etc.
+            max_consecutive_timeouts: Watchdog timeouts before FAULT
+                (0 = never enter FAULT)
+
+        Returns:
+            CyclicController instance (already started)
+
+        Raises:
+            RPCConnectionError: If connection fails
+            RPCError: If PrmEnd or ApplicationReady fails
+            RuntimeError: If cyclic IO not established
+
+        Example:
+            >>> from profinet import IOCRSetup, IOSlot
+            >>> setup = IOCRSetup(slots=[
+            ...     IOSlot(slot=1, subslot=1, input_length=4, output_length=4,
+            ...            module_ident=0x01, submodule_ident=0x01),
+            ... ])
+            >>> with ProfinetDevice.discover("dev", "eth0") as device:
+            ...     cyclic = device.start_cyclic(setup)
+            ...     cyclic.set_output_data(1, 1, b'\\x01\\x02\\x03\\x04')
+            ...     data = cyclic.get_input_data(1, 1)
+            ...     cyclic.stop()
+        """
+        from .cyclic import CyclicController
+        from .rt import (
+            IOCR_TYPE_INPUT,
+            IOCR_TYPE_OUTPUT,
+            IOCRConfig,
+            IODataObject,
+        )
+
+        # 1. Connect with IOCR
+        rpc = self._ensure_connected()
+        result = rpc.connect(
+            src_mac=self._src_mac,
+            with_alarm_cr=True,
+            iocr_setup=iocr_setup,
+        )
+        if not result or not result.has_cyclic:
+            raise RuntimeError("Cyclic IO not established by device")
+
+        # 2. PrmEnd
+        rpc.prm_end()
+
+        # 3. ApplicationReady
+        rpc.application_ready(timeout=30.0)
+
+        # 4. Build IOCRConfigs
+        dst_mac = self._info.mac
+        if isinstance(dst_mac, str):
+            dst_mac = bytes.fromhex(dst_mac.replace(":", ""))
+
+        input_objects = []
+        output_objects = []
+        input_offset = 0
+        output_offset = 0
+
+        for s in iocr_setup.slots:
+            if s.input_length > 0:
+                input_objects.append(
+                    IODataObject(
+                        slot=s.slot,
+                        subslot=s.subslot,
+                        frame_offset=input_offset,
+                        data_length=s.input_length,
+                        iops_offset=input_offset + s.input_length,
+                    )
+                )
+                input_offset += s.input_length + 1  # data + IOPS
+
+        # IOCS entries for input slots with no input data
+        for s in iocr_setup.slots:
+            if s.input_length == 0:
+                input_offset += 1
+
+        input_iocr = IOCRConfig(
+            iocr_type=IOCR_TYPE_INPUT,
+            iocr_reference=1,
+            frame_id=result.input_frame_id,
+            send_clock_factor=iocr_setup.send_clock_factor,
+            reduction_ratio=iocr_setup.reduction_ratio,
+            watchdog_factor=iocr_setup.watchdog_factor,
+            data_length=max(40, input_offset),
+            objects=input_objects,
+        )
+
+        for s in iocr_setup.slots:
+            if s.output_length > 0:
+                output_objects.append(
+                    IODataObject(
+                        slot=s.slot,
+                        subslot=s.subslot,
+                        frame_offset=output_offset,
+                        data_length=s.output_length,
+                        iops_offset=output_offset + s.output_length,
+                    )
+                )
+                output_offset += s.output_length + 1  # data + IOPS
+
+        # IOCS entries for output slots with no output data
+        for s in iocr_setup.slots:
+            if s.output_length == 0:
+                output_offset += 1
+
+        output_iocr = IOCRConfig(
+            iocr_type=IOCR_TYPE_OUTPUT,
+            iocr_reference=2,
+            frame_id=result.output_frame_id,
+            send_clock_factor=iocr_setup.send_clock_factor,
+            reduction_ratio=iocr_setup.reduction_ratio,
+            watchdog_factor=iocr_setup.watchdog_factor,
+            data_length=max(40, output_offset),
+            objects=output_objects,
+        )
+
+        # 5. Create and start CyclicController
+        cyclic = CyclicController(
+            interface=self._interface,
+            src_mac=self._src_mac,
+            dst_mac=dst_mac,
+            input_iocr=input_iocr,
+            output_iocr=output_iocr,
+            max_consecutive_timeouts=max_consecutive_timeouts,
+        )
+        cyclic.start()
+
+        return cyclic
 
     # =========================================================================
     # Utility Methods

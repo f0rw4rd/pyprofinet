@@ -13,7 +13,6 @@ from profinet import (
     PermissionDeniedError,
     ethernet_socket,
     get_mac,
-    get_vendor_name,
     read_response,
     send_discover,
 )
@@ -42,17 +41,7 @@ try:
 
     for mac, blocks in responses.items():
         dev = DCPDeviceDescription(mac, blocks)
-
-        print(f"Device: {dev.name}")
-        mac_str = dev.mac if isinstance(dev.mac, str) else ":".join(f"{b:02x}" for b in dev.mac)
-        print(f"  MAC: {mac_str}")
-        print(f"  IP: {dev.ip}")
-        print(f"  Vendor: {get_vendor_name(dev.vendor_id)} (0x{dev.vendor_id:04X})")
-        print(f"  Device ID: 0x{dev.device_id:04X}")
-        if dev.device_type:
-            print(f"  Type: {dev.device_type}")
-        if dev.device_role:
-            print(f"  Role: {dev.device_role}")
+        print(dev)
         print()
 
 finally:

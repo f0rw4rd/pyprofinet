@@ -2,14 +2,24 @@
 """
 Cyclic IO Demo (RT_CLASS_1).
 
-Demonstrates PROFINET cyclic data exchange using RT_CLASS_1.
+Demonstrates PROFINET cyclic data exchange using RT_CLASS_1 with:
+- Explicit state machine (IDLE -> RUNNING -> STOPPING -> STOPPED)
+- Double-buffered output data
+- Cycle counter tracking (gap/duplicate detection)
+- Watchdog with FAULT state transition
+- IOCS acknowledgment of input data
+- Graceful stop (sends STOP frames before closing)
+- Separate TX/RX sockets
 
 This example:
 1. Discovers the device via DCP
 2. Connects with IOCR blocks for cyclic IO
-3. Sends parameter phase (PrmBegin/PrmEnd)
-4. Signals ApplicationReady
-5. Starts cyclic data exchange
+3. Sends PrmEnd to end parameter phase
+4. Signals ApplicationReady (waits for device CControl)
+5. Starts cyclic data exchange with full statistics
+
+Works with the p-net Docker container (see tests/integration/docker-compose.yml)
+or any PROFINET IO device with the correct slot/module configuration.
 
 Requires root privileges for raw socket access.
 Run with: sudo python3 18_cyclic_io.py
@@ -19,6 +29,7 @@ Press Ctrl+C to stop.
 
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -31,8 +42,7 @@ from profinet import (
     RPCCon,
     ethernet_socket,
     get_mac,
-    read_response,
-    send_discover,
+    get_station_info,
 )
 from profinet.cyclic import CyclicController
 from profinet.rt import (
@@ -42,17 +52,27 @@ from profinet.rt import (
     IODataObject,
 )
 
-INTERFACE = os.environ.get("PROFINET_IFACE", "eth0")
-DEVICE = os.environ.get("PROFINET_DEVICE", "")
+# Device configuration
+DEVICE = os.environ.get("PROFINET_DEVICE", "test-pn-device")
+INTERFACE = os.environ.get("PROFINET_IFACE", "")  # auto-detect if empty
+
+# p-net echo module (slot 4, subslot 1, 8B input + 8B output)
+# See tests/integration/docker-compose.yml for the Docker container setup.
+ECHO_SLOT = 4
+ECHO_SUBSLOT = 1
+ECHO_MOD_IDENT = 0x00000040
+ECHO_SUBMOD_IDENT = 0x00000140
+ECHO_INPUT_LEN = 8
+ECHO_OUTPUT_LEN = 8
 
 # Cycle time in ms
 # WARNING: Python has timing limitations due to the GIL and OS scheduling!
-# - 32ms (default): Safe, reliable on all systems
-# - 16ms: Usually works, may have minor jitter
-# - 8ms:  Minimum practical, expect some jitter under load
-# - <8ms: NOT RECOMMENDED - will have timing issues
-# - <1ms: IMPOSSIBLE in Python
-CYCLE_TIME_MS = int(os.environ.get("PROFINET_CYCLE_MS", "32"))
+# - 128ms: Safe for container testing (default)
+# - 32ms:  Reliable on all systems with real hardware
+# - 16ms:  Usually works, may have minor jitter
+# - 8ms:   Minimum practical, expect some jitter under load
+# - <8ms:  NOT RECOMMENDED - will have timing issues
+CYCLE_TIME_MS = int(os.environ.get("PROFINET_CYCLE_MS", "128"))
 
 # Flag for clean shutdown
 running = True
@@ -65,51 +85,126 @@ def signal_handler(sig, frame):
     running = False
 
 
-def discover_device(interface: str, device_name: str) -> dict:
-    """Discover device via DCP."""
-    print(f"Discovering '{device_name}' on {interface}...")
+def detect_container_bridge():
+    """Detect Docker bridge interface for profinet-test-device container.
 
-    sock = ethernet_socket(interface)
-    src_mac = get_mac(interface)
+    Returns the host-side bridge interface name (br-<id>) or falls back to eth0.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}",
+                "profinet-test-device",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        network_id = result.stdout.strip()
+        if network_id:
+            bridge = f"br-{network_id[:12]}"
+            # Verify interface exists
+            check = subprocess.run(
+                ["ip", "link", "show", bridge],
+                capture_output=True,
+                timeout=5,
+            )
+            if check.returncode == 0:
+                return bridge
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return "eth0"
 
-    # Send DCP identify request
-    send_discover(sock, src_mac, device_name)
 
-    # Wait for response
-    responses = read_response(sock, timeout=3.0)
+def build_iocr_configs(iocr_slots, input_frame_id, output_frame_id, setup):
+    """Build IOCRConfig objects for CyclicController.
 
-    sock.close()
+    Computes frame offsets matching what RPCCon._build_iocr_block builds,
+    including IOCS entries for submodules without data in each direction.
+    """
+    # Input IOCR: device -> controller
+    input_objects = []
+    frame_offset = 0
+    for s in iocr_slots:
+        if s.input_length > 0:
+            input_objects.append(
+                IODataObject(
+                    slot=s.slot,
+                    subslot=s.subslot,
+                    frame_offset=frame_offset,
+                    data_length=s.input_length,
+                    iops_offset=frame_offset + s.input_length,
+                )
+            )
+            frame_offset += s.input_length + 1  # data + IOPS
 
-    if not responses:
-        raise RuntimeError(f"Device '{device_name}' not found")
+    # IOCS entries for slots with no input data
+    for s in iocr_slots:
+        if s.input_length == 0:
+            frame_offset += 1
 
-    # Return first matching device
-    for resp in responses:
-        if resp.name_of_station.lower() == device_name.lower():
-            return resp
-        # Also match by MAC
-        if device_name.lower().replace(":", "") in resp.mac.lower().replace(":", ""):
-            return resp
+    input_iocr = IOCRConfig(
+        iocr_type=IOCR_TYPE_INPUT,
+        iocr_reference=1,
+        frame_id=input_frame_id,
+        send_clock_factor=setup.send_clock_factor,
+        reduction_ratio=setup.reduction_ratio,
+        watchdog_factor=setup.watchdog_factor,
+        data_length=max(40, frame_offset),
+        objects=input_objects,
+    )
 
-    raise RuntimeError(f"Device '{device_name}' not found in {len(responses)} responses")
+    # Output IOCR: controller -> device
+    output_objects = []
+    frame_offset = 0
+    for s in iocr_slots:
+        if s.output_length > 0:
+            output_objects.append(
+                IODataObject(
+                    slot=s.slot,
+                    subslot=s.subslot,
+                    frame_offset=frame_offset,
+                    data_length=s.output_length,
+                    iops_offset=frame_offset + s.output_length,
+                )
+            )
+            frame_offset += s.output_length + 1  # data + IOPS
+
+    # IOCS entries for slots with no output data
+    for s in iocr_slots:
+        if s.output_length == 0:
+            frame_offset += 1
+
+    output_iocr = IOCRConfig(
+        iocr_type=IOCR_TYPE_OUTPUT,
+        iocr_reference=2,
+        frame_id=output_frame_id,
+        send_clock_factor=setup.send_clock_factor,
+        reduction_ratio=setup.reduction_ratio,
+        watchdog_factor=setup.watchdog_factor,
+        data_length=max(40, frame_offset),
+        objects=output_objects,
+    )
+
+    return input_iocr, output_iocr
 
 
 def main():
     global running
 
+    # Auto-detect interface if not set
+    interface = INTERFACE or detect_container_bridge()
+
     if not DEVICE:
-        print("Usage: sudo PROFINET_DEVICE=<name_or_mac> python3 18_cyclic_io.py")
+        print("Usage: sudo PROFINET_DEVICE=<name> python3 18_cyclic_io.py")
         print("  Or:  sudo PROFINET_IFACE=eth0 PROFINET_DEVICE=my-device python3 18_cyclic_io.py")
         print("\nEnvironment variables:")
-        print("  PROFINET_IFACE      - Network interface (default: eth0)")
-        print("  PROFINET_DEVICE     - Device name or MAC address")
-        print("  PROFINET_CYCLE_MS   - Cycle time in ms (default: 32)")
-        print("\n*** PYTHON TIMING WARNING ***")
-        print("Python has timing limitations due to GIL and OS scheduling:")
-        print("  32ms+  : Reliable on all systems (RECOMMENDED)")
-        print("  8-16ms : Usually works, minor jitter possible")
-        print("  <8ms   : NOT RECOMMENDED - timing issues likely")
-        print("  <1ms   : IMPOSSIBLE in Python - use C/C++ instead")
+        print(f"  PROFINET_IFACE      - Network interface (auto-detected: {interface})")
+        print("  PROFINET_DEVICE     - Device station name (default: test-pn-device)")
+        print("  PROFINET_CYCLE_MS   - Cycle time in ms (default: 128)")
         sys.exit(1)
 
     # Warn if cycle time is too low
@@ -120,203 +215,187 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Step 1: Discover device
+    # ---- Step 1: Discover device ----
+    print(f"[1] Discovering '{DEVICE}' on {interface}...")
+    sock = ethernet_socket(interface)
+    src_mac = get_mac(interface)
     try:
-        device = discover_device(INTERFACE, DEVICE)
-        print(f"Found: {device.name_of_station} at {device.ip}")
-        print(f"  MAC: {device.mac}")
-        print(f"  Vendor: {device.vendor_id:04X} Device: {device.device_id:04X}")
+        info = get_station_info(sock, src_mac, DEVICE, timeout_sec=5)
     except Exception as e:
-        print(f"Discovery failed: {e}")
+        print(f"    Discovery failed: {e}")
         sys.exit(1)
+    finally:
+        sock.close()
 
-    # Step 2: Configure IOCR
-    # NOTE: These slot/subslot values must match your actual device!
-    # You can discover available slots using example 05_discover_topology.py
-    print("\nConfiguring IOCR...")
+    dst_mac = info.mac if isinstance(info.mac, bytes) else bytes.fromhex(info.mac.replace(":", ""))
+    print(f"    Found: {info.name} at {info.ip}")
+    print(f"    MAC: {':'.join(f'{b:02x}' for b in dst_mac)}")
 
-    # Calculate timing factors
-    # Cycle time = send_clock_factor * reduction_ratio * 31.25us
-    # For 8ms: 32 * 8 * 31.25us = 8000us = 8ms
+    # ---- Step 2: Configure IOCR ----
+    print(f"\n[2] Configuring IOCR (cycle={CYCLE_TIME_MS}ms)...")
+
     send_clock_factor = 32  # 1ms base (31.25us * 32 = 1ms)
     reduction_ratio = CYCLE_TIME_MS
 
-    print(f"  Cycle time: {CYCLE_TIME_MS}ms")
-    print(f"  send_clock_factor: {send_clock_factor}")
-    print(f"  reduction_ratio: {reduction_ratio}")
-
-    # Example slot configuration (adjust for your device)
-    # This is a common configuration for a simple IO device:
+    # Echo module: 8B input + 8B output at slot 4
+    # Adjust these for your device! Use discover_slots() or GSDML to find
+    # the correct module/submodule IDs and IO sizes.
     iocr_setup = IOCRSetup(
         slots=[
-            # DAP (Device Access Point) - slot 0, subslot 1
-            # Usually has status info but no process data
             IOSlot(
-                slot=0,
-                subslot=1,
-                module_ident=0x00003010,  # DAP module
-                submodule_ident=0x00003010,
-                input_length=0,
-                output_length=0,
-            ),
-            # IO Module - slot 1, subslot 1
-            # Example: 8 bytes output
-            IOSlot(
-                slot=1,
-                subslot=1,
-                module_ident=0x10000000,  # Example module ID
-                submodule_ident=0x20000000,  # Example submodule ID
-                input_length=0,
-                output_length=8,
+                slot=ECHO_SLOT,
+                subslot=ECHO_SUBSLOT,
+                module_ident=ECHO_MOD_IDENT,
+                submodule_ident=ECHO_SUBMOD_IDENT,
+                input_length=ECHO_INPUT_LEN,
+                output_length=ECHO_OUTPUT_LEN,
             ),
         ],
         send_clock_factor=send_clock_factor,
         reduction_ratio=reduction_ratio,
-        watchdog_factor=3,
-        data_hold_factor=3,
+        watchdog_factor=10,
+        data_hold_factor=10,
     )
 
-    # Step 3: Connect with IOCR
-    print("\nConnecting to device with IOCR...")
-
-    src_mac = bytes.fromhex(get_mac(INTERFACE).replace(":", ""))
-    dst_mac = bytes.fromhex(device.mac.replace(":", ""))
-
-    try:
-        rpc = RPCCon(
-            device.ip,
-            interface=INTERFACE,
-            mac=dst_mac,
+    for s in iocr_setup.slots:
+        print(
+            f"    Slot {s.slot}: mod=0x{s.module_ident:08X} sub=0x{s.submodule_ident:08X} "
+            f"in={s.input_length}B out={s.output_length}B"
         )
 
+    # ---- Step 3: Connect with IOCR ----
+    print("\n[3] Connecting with IOCR...")
+    rpc = RPCCon(info, timeout=10.0)
+    try:
         result = rpc.connect(
             src_mac=src_mac,
-            with_alarm_cr=False,  # AlarmCR often causes issues
+            with_alarm_cr=True,
             iocr_setup=iocr_setup,
         )
-
-        if result:
-            print("Connected with IOCR!")
-            print(f"  Input Frame ID:  0x{result.input_frame_id:04X}")
-            print(f"  Output Frame ID: 0x{result.output_frame_id:04X}")
-        else:
-            print("Connected (no IOCR result)")
-
     except Exception as e:
-        print(f"Connect failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        sys.exit(1)
-
-    # Step 4: Parameter phase
-    print("\nParameter phase...")
-    try:
-        rpc.prm_begin()
-        print("  PrmBegin OK")
-
-        # Here you would write device parameters if needed
-        # rpc.write(api, slot, subslot, index, data)
-
-        rpc.prm_end()
-        print("  PrmEnd OK")
-    except Exception as e:
-        print(f"Parameter phase failed: {e}")
+        print(f"    Connect failed: {e}")
         rpc.close()
         sys.exit(1)
 
-    # Step 5: Application Ready
-    print("\nSignaling ApplicationReady...")
+    if not result or not result.has_cyclic:
+        print("    No cyclic IO established")
+        rpc.close()
+        sys.exit(1)
+
+    print(f"    Input Frame ID:  0x{result.input_frame_id:04X}")
+    print(f"    Output Frame ID: 0x{result.output_frame_id:04X}")
+
+    # ---- Step 4: PrmEnd ----
+    print("\n[4] PrmEnd...")
     try:
-        rpc.application_ready()
-        print("  ApplicationReady OK - Device should enter RUN state")
+        rpc.prm_end()
+        print("    OK")
     except Exception as e:
-        print(f"ApplicationReady failed: {e}")
-        # This is often expected if device is not properly configured
-        print("  (Device may not support cyclic IO or needs proper configuration)")
+        print(f"    Failed: {e}")
+        rpc.close()
+        sys.exit(1)
 
-    # Step 6: Start cyclic data exchange
-    if result and result.output_frame_id > 0:
-        print("\nStarting cyclic data exchange...")
+    # ---- Step 5: ApplicationReady ----
+    print("\n[5] ApplicationReady (waiting for device CControl)...")
+    try:
+        rpc.application_ready(timeout=30.0)
+        print("    OK - device in RUN state")
+    except Exception as e:
+        print(f"    Failed: {e}")
+        rpc.close()
+        sys.exit(1)
 
-        # Build IOCR configs from setup
-        output_iocr = IOCRConfig(
-            iocr_type=IOCR_TYPE_OUTPUT,
-            iocr_reference=1,
-            frame_id=result.output_frame_id,
-            send_clock_factor=send_clock_factor,
-            reduction_ratio=reduction_ratio,
-            data_length=48,  # Minimum padded length
-            objects=[
-                IODataObject(slot=1, subslot=1, frame_offset=0, data_length=8, iops_offset=8),
-            ],
-        )
+    # ---- Step 6: Build IOCRConfigs and start cyclic ----
+    print(f"\n[6] Starting cyclic exchange ({CYCLE_TIME_MS}ms cycle)...")
 
-        input_iocr = IOCRConfig(
-            iocr_type=IOCR_TYPE_INPUT,
-            iocr_reference=2,
-            frame_id=result.input_frame_id,
-            send_clock_factor=send_clock_factor,
-            reduction_ratio=reduction_ratio,
-            data_length=48,
-            objects=[],  # No input objects in this example
-        )
+    input_iocr, output_iocr = build_iocr_configs(
+        iocr_setup.slots,
+        result.input_frame_id,
+        result.output_frame_id,
+        iocr_setup,
+    )
 
-        cyclic = CyclicController(
-            interface=INTERFACE,
-            src_mac=src_mac,
-            dst_mac=dst_mac,
-            input_iocr=input_iocr,
-            output_iocr=output_iocr,
-        )
+    cyclic = CyclicController(
+        interface=interface,
+        src_mac=src_mac,
+        dst_mac=dst_mac,
+        input_iocr=input_iocr,
+        output_iocr=output_iocr,
+        max_consecutive_timeouts=10,
+    )
 
-        # Set initial output data
-        cyclic.set_output_data(1, 1, bytes(8))  # 8 zero bytes
+    # Register callbacks
+    def on_state_change(old, new):
+        print(f"    State: {old.value} -> {new.value}")
 
-        # Start cyclic threads
-        cyclic.start()
-        print(f"Cyclic exchange running at {CYCLE_TIME_MS}ms cycle time")
-        print("Press Ctrl+C to stop.\n")
+    def on_timeout():
+        pass  # handled by stats
 
-        # Main loop - update outputs periodically
-        counter = 0
-        while running:
-            time.sleep(0.1)
-            counter = (counter + 1) % 256
+    def on_error(msg):
+        print(f"    ERROR: {msg}")
 
-            # Update output data (example: incrementing counter)
-            output_data = bytes([counter] * 8)
-            cyclic.set_output_data(1, 1, output_data)
+    cyclic.on_state_change(on_state_change)
+    cyclic.on_timeout(on_timeout)
+    cyclic.on_error(on_error)
 
-            # Print stats every 5 seconds
-            if counter % 50 == 0:
-                print(
-                    f"Stats: TX={cyclic.stats.frames_sent}, "
-                    f"RX={cyclic.stats.frames_received}, "
-                    f"Missed={cyclic.stats.frames_missed}"
-                )
+    # Set initial output data (8B echo pattern)
+    cyclic.set_output_data(ECHO_SLOT, ECHO_SUBSLOT, b"\x00" * ECHO_OUTPUT_LEN)
 
-        # Stop cyclic
-        print("\nStopping cyclic exchange...")
-        cyclic.stop()
-        print(
-            f"Final stats: TX={cyclic.stats.frames_sent}, "
-            f"RX={cyclic.stats.frames_received}, "
-            f"Missed={cyclic.stats.frames_missed}"
-        )
+    cyclic.start()
+    print("    Press Ctrl+C to stop.\n")
 
-    else:
-        print("\nNo IOCR established - cyclic IO not available")
-        print("Keeping connection open for 10 seconds...")
-        for _i in range(10):
-            if not running:
-                break
-            time.sleep(1)
+    # ---- Step 7: Run - read inputs, update outputs ----
+    last_print = time.time()
+    counter = 0
+
+    while running:
+        time.sleep(0.5)
+
+        # Read echo input data
+        echo_in = cyclic.get_input_data(ECHO_SLOT, ECHO_SUBSLOT)
+
+        # Update output with incrementing echo pattern
+        counter = (counter + 1) & 0xFF
+        pattern = bytes([counter] * ECHO_OUTPUT_LEN)
+        cyclic.set_output_data(ECHO_SLOT, ECHO_SUBSLOT, pattern)
+
+        # Print status every 5 seconds
+        now = time.time()
+        if now - last_print >= 5.0:
+            last_print = now
+            s = cyclic.stats
+            echo_hex = echo_in.hex() if echo_in else "--"
+            print(
+                f"[{cyclic.state.value:>8s}] "
+                f"TX={s.frames_sent:<6d} RX={s.frames_received:<6d} "
+                f"missed={s.frames_missed} dup={s.frames_duplicate} "
+                f"ooo={s.frames_out_of_order} inv={s.frames_invalid} "
+                f"jitter={s.max_jitter_us}us | "
+                f"echo_in={echo_hex} out=0x{counter:02X}"
+            )
+
+    # ---- Step 8: Graceful stop ----
+    print("\n[8] Stopping cyclic exchange...")
+    cyclic.stop()
+
+    s = cyclic.stats
+    print("\n    Final statistics:")
+    print(f"      Frames sent:       {s.frames_sent}")
+    print(f"      Frames received:   {s.frames_received}")
+    print(f"      Frames missed:     {s.frames_missed}")
+    print(f"      Frames duplicate:  {s.frames_duplicate}")
+    print(f"      Frames out-of-order: {s.frames_out_of_order}")
+    print(f"      Frames invalid:    {s.frames_invalid}")
+    print(f"      Avg cycle time:    {s.avg_cycle_time_us}us")
+    print(f"      Max jitter:        {s.max_jitter_us}us")
+    if s._cycle_count > 0:
+        print(f"      Min cycle time:    {s.min_cycle_time_us}us")
+        print(f"      Max cycle time:    {s.max_cycle_time_us}us")
 
     # Cleanup
-    print("\nDisconnecting...")
+    print("\n    Disconnecting...")
     rpc.close()
-    print("Done.")
+    print("    Done.")
 
 
 if __name__ == "__main__":
