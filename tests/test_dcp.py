@@ -530,6 +530,35 @@ class TestSetParam:
         assert result is False  # No response received
 
 
+def _build_dcp_set_response(dst_mac: bytes, src_mac: bytes, block_error: int = 0x00) -> bytes:
+    """Build a valid DCP SET response Ethernet frame for testing.
+
+    Args:
+        dst_mac: Destination MAC (our MAC)
+        src_mac: Source MAC (device MAC)
+        block_error: Block error code (0x00 = success)
+
+    Returns:
+        Raw Ethernet frame bytes
+    """
+    import struct
+
+    # Control/Response block: option=0x05, suboption=0x04, length=3,
+    # payload = option_for_resp(1) + suboption_for_resp(1) + block_error(1)
+    ctrl_block = struct.pack(">BBH", 0x05, 0x04, 3) + bytes([0x05, 0x03, block_error])
+    # Pad to 2-byte alignment (length=3 is odd, add 1 byte padding)
+    ctrl_block += b"\x00"
+
+    # DCP header: frame_id(2) + service_id(1) + service_type(1) + xid(4) + resp(2) + length(2)
+    dcp_hdr = struct.pack(">HBBI HH", 0xFEFD, 0x04, 0x01, 0x00000000, 0, len(ctrl_block))
+    dcp_payload = dcp_hdr + ctrl_block
+
+    # Ethernet header: dst(6) + src(6) + ethertype(2)
+    eth_hdr = dst_mac + src_mac + struct.pack(">H", 0x8892)
+
+    return eth_hdr + dcp_payload
+
+
 class TestSignalDevice:
     """Test signal_device function."""
 
@@ -550,13 +579,17 @@ class TestSignalDevice:
         assert result is False  # No response
 
     def test_signal_device_success(self):
-        """Test signal_device returns True on response."""
+        """Test signal_device returns True on valid response."""
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
         mock_sock = MagicMock()
-        mock_sock.recv.return_value = b"\x00" * 100  # Fake response
-
-        result = signal_device(
-            mock_sock, b"\x00\x11\x22\x33\x44\x55", "AA:BB:CC:DD:EE:FF", timeout_sec=1
+        # Build a proper DCP SET response frame
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=b"\xaa\xbb\xcc\xdd\xee\xff",
         )
+        mock_sock.recv.return_value = response
+
+        result = signal_device(mock_sock, src_mac, "AA:BB:CC:DD:EE:FF", timeout_sec=1)
 
         assert result is True
 
@@ -581,13 +614,19 @@ class TestResetToFactory:
         assert result is False  # No response
 
     def test_reset_to_factory_success(self):
-        """Test reset_to_factory returns True on response."""
+        """Test reset_to_factory returns True on valid response."""
+        src_mac = b"\x00\x11\x22\x33\x44\x55"
         mock_sock = MagicMock()
-        mock_sock.recv.return_value = b"\x00" * 100  # Fake response
+        # Build a proper DCP SET response frame
+        response = _build_dcp_set_response(
+            dst_mac=src_mac,
+            src_mac=b"\xaa\xbb\xcc\xdd\xee\xff",
+        )
+        mock_sock.recv.return_value = response
 
         result = reset_to_factory(
             mock_sock,
-            b"\x00\x11\x22\x33\x44\x55",
+            src_mac,
             "AA:BB:CC:DD:EE:FF",
             mode=RESET_MODE_COMMUNICATION,
             timeout_sec=1,

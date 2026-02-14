@@ -79,8 +79,9 @@ UInt16ubStruct = cs.Struct(
 # Constants
 # =============================================================================
 
-# DCP multicast address
-DCP_MULTICAST_MAC = "01:0e:cf:00:00:00"
+# DCP multicast addresses per IEC 61158-6-10
+DCP_MULTICAST_MAC = "01:0e:cf:00:00:00"  # Identify multicast
+DCP_HELLO_MULTICAST_MAC = "01:0e:cf:00:00:01"  # Hello multicast
 
 # DCP Frame IDs
 DCP_IDENTIFY_REQUEST_FRAME_ID = 0xFEFE
@@ -1200,6 +1201,7 @@ def read_response(
     timeout_sec: int = 20,
     once: bool = False,
     debug: bool = False,
+    expected_xid: Optional[int] = None,
 ) -> Dict[bytes, Dict[Any, Any]]:
     """Read and parse DCP responses.
 
@@ -1209,6 +1211,7 @@ def read_response(
         timeout_sec: Maximum time to wait for responses
         once: If True, return after first response
         debug: If True, log debug information
+        expected_xid: If set, only accept responses matching this transaction ID
 
     Returns:
         Dictionary mapping MAC addresses to parsed block data
@@ -1267,6 +1270,14 @@ def read_response(
 
                 # Filter: only DCP responses
                 if dcp.service_type != PNDCPHeader.RESPONSE:
+                    continue
+
+                # Validate transaction ID if specified
+                if expected_xid is not None and dcp.xid != expected_xid:
+                    logger.debug(
+                        f"Ignoring response with wrong XID "
+                        f"(got 0x{dcp.xid:08X}, expected 0x{expected_xid:08X})"
+                    )
                     continue
 
                 # Parse DCP blocks
@@ -1415,9 +1426,9 @@ def send_hello(
         payload=blocks_data,
     )
 
-    # Send to multicast address
+    # Send to DCP Hello multicast address (01:0e:cf:00:00:01)
     eth = EthernetHeader(
-        s2mac(DCP_MULTICAST_MAC),
+        s2mac(DCP_HELLO_MULTICAST_MAC),
         src,
         PROFINET_ETHERTYPE,
         payload=dcp,
@@ -1574,10 +1585,14 @@ def signal_device(
     sock.send(bytes(eth))
     logger.debug(f"Sent DCP Signal request to {target} (duration={duration_ms}ms)")
 
-    # Wait for response
-    sock.settimeout(float(timeout_sec))
+    # Wait for and validate response
     try:
-        sock.recv(MAX_ETHERNET_FRAME)
+        block_error = _recv_set_response(sock, src, timeout_sec)
+        if block_error != DCP_BLOCK_ERROR_OK:
+            error_name = DCP_BLOCK_ERROR_NAMES.get(
+                block_error, f"Unknown error (0x{block_error:02X})"
+            )
+            raise DCPError(f"DCP Signal failed: {error_name}")
         return True
     except TimeoutError:
         logger.warning(f"No response from {target} for signal command")
@@ -1638,10 +1653,14 @@ def reset_to_factory(
     sock.send(bytes(eth))
     logger.debug(f"Sent DCP Reset to Factory request to {target} (mode=0x{mode:04X})")
 
-    # Wait for response
-    sock.settimeout(float(timeout_sec))
+    # Wait for and validate response
     try:
-        sock.recv(MAX_ETHERNET_FRAME)
+        block_error = _recv_set_response(sock, src, timeout_sec)
+        if block_error != DCP_BLOCK_ERROR_OK:
+            error_name = DCP_BLOCK_ERROR_NAMES.get(
+                block_error, f"Unknown error (0x{block_error:02X})"
+            )
+            raise DCPError(f"DCP Reset to Factory failed: {error_name}")
         # Device needs time to reset
         time.sleep(2)
         return True

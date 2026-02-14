@@ -931,8 +931,9 @@ class RPCCon:
 
         # Connection state
         self.live: Optional[datetime] = None
+        self._live_monotonic: Optional[float] = None  # Monotonic clock for timeout
         self.src_mac: Optional[bytes] = None
-        self.session_key: int = 0x1234  # Session key for AR
+        self.session_key: int = int.from_bytes(os.urandom(2), "big") or 1  # Random, non-zero
 
         # AlarmCR state
         self._alarm_ref: int = 1  # Controller's local alarm reference
@@ -1300,11 +1301,14 @@ class RPCCon:
     def _send_receive(self, rpc: PNRPCHeader) -> PNRPCHeader:
         """Send RPC request and receive response with validation.
 
+        Parses the response with DREP-aware endianness so that devices
+        responding with DREP=0x10 (little-endian) are handled correctly.
+
         Args:
             rpc: RPC request packet
 
         Returns:
-            Parsed RPC response
+            Parsed RPC response (with correctly byte-ordered fields)
 
         Raises:
             RPCTimeoutError: If no response received
@@ -1339,15 +1343,39 @@ class RPCCon:
 
             logger.debug(f"RPC response raw ({len(data)} bytes): {data[:100].hex(' ')}...")
 
+            # Parse with DREP-aware endianness
+            hdr = self._parse_rpc_header(data)
+            if hdr is None:
+                raise RPCError(f"Failed to parse RPC response: data too short ({len(data)} bytes)")
+
+            # Build a PNRPCHeader-compatible object from the DREP-aware parse.
+            # We re-parse via PNRPCHeader for the namedtuple API, but if the
+            # response is little-endian we must use the DREP-parsed values.
             try:
                 rpc_resp = PNRPCHeader(data)
             except ValueError as e:
                 raise RPCError(f"Failed to parse RPC response: {e}") from e
 
+            if hdr["is_little_endian"]:
+                # The make_packet parse used big-endian; override with
+                # correctly parsed multi-byte fields from DREP-aware parser.
+                rpc_resp = rpc_resp._replace(
+                    operation_number=hdr["operation_number"],
+                    length_of_body=hdr["length_of_body"],
+                    fragment_number=hdr["fragment_number"],
+                    sequence_number=hdr["sequence_number"],
+                    server_boot_time=hdr["server_boot_time"],
+                    interface_version=hdr["interface_version"],
+                    interface_hint=hdr["interface_hint"],
+                    activity_hint=hdr["activity_hint"],
+                    payload=hdr["payload"],
+                )
+
             logger.debug(
                 f"RPC response parsed: type=0x{rpc_resp.packet_type:02X} "
                 f"op={rpc_resp.operation_number} body_len={rpc_resp.length_of_body} "
-                f"payload_len={len(rpc_resp.payload)}"
+                f"payload_len={len(rpc_resp.payload)} "
+                f"drep={'LE' if hdr['is_little_endian'] else 'BE'}"
             )
 
             # Skip our own request echoed back (happens with local destination IP)
@@ -1369,12 +1397,13 @@ class RPCCon:
             raise RPCError(f"Unexpected RPC packet type: 0x{rpc_resp.packet_type:02X}")
 
         self.live = datetime.now()
+        self._live_monotonic = _time.monotonic()
         return rpc_resp
 
     def _check_timeout(self) -> None:
         """Check if connection has timed out and reconnect if needed."""
-        if self.live is not None:
-            elapsed = (datetime.now() - self.live).seconds
+        if self._live_monotonic is not None:
+            elapsed = _time.monotonic() - self._live_monotonic
             if elapsed >= CONNECTION_TIMEOUT:
                 logger.debug("Connection timeout, reconnecting...")
                 self.connect()
@@ -1407,8 +1436,13 @@ class RPCCon:
             if src_mac is None:
                 raise ValueError("src_mac required for initial connection")
             self.src_mac = src_mac
-        elif src_mac is not None:
-            self.src_mac = src_mac
+        else:
+            # Reconnect: regenerate UUIDs and session key per IEC 61158-6-10
+            self.ar_uuid = os.urandom(16)
+            self.activity_uuid = os.urandom(16)
+            self.session_key = int.from_bytes(os.urandom(2), "big") or 1
+            if src_mac is not None:
+                self.src_mac = src_mac
 
         if self.src_mac is None:
             raise ValueError("No source MAC address available")
@@ -3237,6 +3271,7 @@ class RPCCon:
 
                 logger.info("ApplicationReady confirmed (DONE)")
                 self.live = datetime.now()
+                self._live_monotonic = _time.monotonic()
                 return nrd_body
 
         finally:
@@ -3297,6 +3332,7 @@ class RPCCon:
             logger.debug(f"Release failed: {e}")
 
         self.live = None
+        self._live_monotonic = None
 
     def close(self) -> None:
         """Close RPC connection (sends Release if connected)."""

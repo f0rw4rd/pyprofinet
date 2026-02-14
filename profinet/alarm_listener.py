@@ -385,7 +385,7 @@ class AlarmListener:
 
             if self.endpoint.transport == 0:
                 # Layer 2 with RTA header
-                self._send_layer2_ack(ack_data, src_mac)
+                self._send_layer2_ack(ack_data, src_mac, alarm.is_high_priority)
             else:
                 # UDP
                 self._send_udp_ack(ack_data, src_addr)
@@ -397,12 +397,15 @@ class AlarmListener:
         except Exception as e:
             logger.error(f"Failed to send AlarmAck: {e}")
 
-    def _send_layer2_ack(self, ack_data: bytes, dst_mac: bytes) -> None:
+    def _send_layer2_ack(
+        self, ack_data: bytes, dst_mac: bytes, high_priority: bool = False
+    ) -> None:
         """Send acknowledgment via Layer 2.
 
         Args:
             ack_data: Serialized AlarmAck PDU
             dst_mac: Destination MAC address
+            high_priority: True for high-priority alarm ack frame ID
         """
         # Build RTA header
         self._send_seq_num = (self._send_seq_num + 1) & 0xFFFF
@@ -410,20 +413,23 @@ class AlarmListener:
         rta_header = PNRTAHeader(
             alarm_dst_endpoint=self.endpoint.device_ref,
             alarm_src_endpoint=self.endpoint.controller_ref,
-            pdu_type=(PNRTAHeader.RTA_TYPE_ACK << 4) | PNRTAHeader.VERSION_1,
+            pdu_type=(PNRTAHeader.RTA_TYPE_DATA << 4) | PNRTAHeader.VERSION_1,
             add_flags=0,
             send_seq_num=self._send_seq_num,
             ack_seq_num=self._recv_seq_num,
             var_part_len=len(ack_data),
+            payload=b"",
         )
 
-        # Build complete frame
-        # FrameID for alarm ack (same direction as alarm)
+        # Build complete frame with priority-matching frame ID
+        frame_id_bytes = (
+            cs.Int16ub.build(FRAME_ID_ALARM_HIGH) if high_priority else _FRAME_ID_ALARM_LOW_BYTES
+        )
         eth_frame = (
             dst_mac
             + self.controller_mac
             + _ETHERTYPE_PROFINET_BYTES
-            + _FRAME_ID_ALARM_LOW_BYTES
+            + frame_id_bytes
             + bytes(rta_header)
             + ack_data
         )
